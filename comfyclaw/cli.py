@@ -395,18 +395,29 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         "run_mode": getattr(args, "mode", "auto"),
     }
 
+    # ── Print the config block first ────────────────────────────────────
     print("\n[cli] ComfyClaw serve mode")
+    print(f"[cli] Agent backend  : {base_cfg['agent_backend']}")
     print(f"[cli] Agent model    : {args.model}")
+    print(f"[cli] Verifier model : {base_cfg['verifier_model'] or '(same as agent)'}")
+    print(f"[cli] Run mode       : {base_cfg['run_mode']}")
+    print(f"[cli] ComfyUI        : http://{addr}")
     print(f"[cli] Image model    : {base_cfg['image_model'] or '(from workflow)'}")
-    print(f"[cli] Sync port      : {sync_port}")
-    print("[cli] Waiting for triggers from ComfyUI panel…\n")
+    print(f"[cli] Repair limit   : {base_cfg['max_repair_attempts']} attempt(s) per iteration")
+    print(f"[cli] Default iters  : {args.iterations}  (panel can override per run)")
+    print(f"[cli] Threshold      : {base_cfg['success_threshold']}")
+    print()
 
+    # ── Bring the sync server up silently ───────────────────────────────
+    # quiet=True suppresses the "Listening on ws://..." line; our own Ready
+    # banner below carries the same information in a cleaner format.
     sync = SyncServer(
         port=sync_port,
         model=base_cfg["model"],
         api_key=api_key,
         server_address=addr,
         skills_dir=args.skills_dir,
+        quiet=True,
     )
     sync.start()
     if not sync.is_running():
@@ -434,6 +445,32 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 f"[cli] Error: SyncServer failed to start on port {sync_port}. "
                 f"Free the port manually: lsof -ti :{sync_port} | xargs kill"
             )
+
+    # ── Count skills up-front (quiet) for the Ready banner ──────────────
+    # The SyncServer's own registry is lazy and only warms on the first
+    # trigger, so it can't tell us the count yet. Load a separate one just
+    # to read the count without spamming the log.
+    skill_count = 0
+    try:
+        from .skill_manager import SkillsRegistry
+
+        skill_count = len(SkillsRegistry(skills_dir=args.skills_dir, quiet=True).skill_names)
+    except Exception:
+        pass
+
+    # ── Emit a single, coherent "Ready" banner only after everything is up ──
+    # The hostname the user types into a browser is more useful than the
+    # bind address (which is 0.0.0.0 by default), so prefer the ComfyUI host.
+    ws_host = addr.split(":")[0] if ":" in addr else "127.0.0.1"
+    ws_url = f"ws://{ws_host}:{sync_port}"
+    bar = "─" * 60
+    print(bar)
+    print(f"[serve] ✅ Ready. Connect ComfyUI panel to  {ws_url}")
+    if skill_count:
+        print(f"[serve]    {skill_count} skills loaded.")
+    print(f"[serve]    Open ComfyUI at http://{addr} → look for the 🐾 panel.")
+    print(bar)
+    print()
 
     try:
         while True:
@@ -637,6 +674,223 @@ def _cmd_node_path(_args: argparse.Namespace) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# `comfyclaw doctor` — pre-flight check
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+_DOCTOR_PROVIDERS: tuple[tuple[str, str], ...] = (
+    ("ANTHROPIC_API_KEY", "anthropic/claude-*"),
+    ("OPENAI_API_KEY", "openai/gpt-*, openai/o*"),
+    ("GEMINI_API_KEY", "gemini/gemini-*"),
+    ("GROQ_API_KEY", "groq/*"),
+    ("AZURE_API_KEY", "azure/<deployment>"),
+)
+
+
+def _doctor_row(state: str, label: str, detail: str = "") -> None:
+    """Print one doctor row.  ``state`` ∈ {ok, warn, fail}."""
+    icons = {"ok": "✅", "warn": "⚠ ", "fail": "❌"}
+    icon = icons.get(state, "•")
+    line = f"  {icon}  {label}"
+    if detail:
+        line = f"{line:<42} {detail}"
+    print(line)
+
+
+def _cmd_doctor(args: argparse.Namespace) -> None:
+    """Pre-flight check: env, ComfyUI, plugin, port, skills."""
+    print("\n[doctor] ComfyClaw pre-flight check\n")
+
+    critical_failures = 0
+    warnings = 0
+
+    # ── 1. Python version ────────────────────────────────────────────────
+    py = sys.version_info
+    py_str = f"{py.major}.{py.minor}.{py.micro}"
+    if (py.major, py.minor) >= (3, 10):
+        _doctor_row("ok", "Python version", py_str)
+    else:
+        _doctor_row("fail", "Python version", f"{py_str} (need ≥ 3.10)")
+        critical_failures += 1
+
+    # ── 2. `.env` file ───────────────────────────────────────────────────
+    cwd_env = Path.cwd() / ".env"
+    pkg_env = Path(__file__).resolve().parent.parent / ".env"
+    found_env = cwd_env if cwd_env.exists() else (pkg_env if pkg_env.exists() else None)
+    if found_env:
+        _doctor_row("ok", ".env file", str(found_env))
+    else:
+        _doctor_row(
+            "warn",
+            ".env file",
+            "not found — relying on shell environment only",
+        )
+        warnings += 1
+
+    # ── 3. Provider API keys ─────────────────────────────────────────────
+    provider_count = 0
+    for var, models in _DOCTOR_PROVIDERS:
+        if os.environ.get(var, "").strip():
+            _doctor_row("ok", f"{var}", f"set → covers {models}")
+            provider_count += 1
+    if provider_count == 0:
+        # Local Ollama doesn't need a key, so this is a warning, not fatal.
+        _doctor_row(
+            "warn",
+            "Provider API key",
+            "none set — only local providers (e.g. ollama/*) will work",
+        )
+        warnings += 1
+
+    # ── 4. ComfyUI reachable ─────────────────────────────────────────────
+    addr = getattr(args, "comfyui_addr", None) or _server_addr()
+    try:
+        from .client import ComfyClient
+
+        if ComfyClient(addr).is_alive():
+            _doctor_row("ok", "ComfyUI", f"reachable at http://{addr}")
+        else:
+            # Scan common ports on the same host
+            host = addr.split(":")[0] if ":" in addr else "127.0.0.1"
+            found_alt = None
+            for port in (8188, 8000, 8080, 7130):
+                alt = f"{host}:{port}"
+                if alt != addr and ComfyClient(alt).is_alive():
+                    found_alt = alt
+                    break
+            if found_alt:
+                _doctor_row(
+                    "warn",
+                    "ComfyUI",
+                    f"not at {addr} but found at {found_alt} — update COMFYUI_ADDR",
+                )
+                warnings += 1
+            else:
+                _doctor_row("fail", "ComfyUI", f"not reachable at {addr}")
+                critical_failures += 1
+    except Exception as exc:
+        _doctor_row("fail", "ComfyUI", f"probe failed: {exc}")
+        critical_failures += 1
+
+    # ── 5. Plugin installed in ComfyUI's custom_nodes/ ────────────────────
+    comfyui_dir = _comfyui_dir()
+    nodes_dir = comfyui_dir / "custom_nodes"
+    plugin_link = nodes_dir / "ComfyClaw-Sync"
+    if not nodes_dir.is_dir():
+        _doctor_row(
+            "warn",
+            "ComfyClaw-Sync plugin",
+            f"ComfyUI custom_nodes/ not found at {nodes_dir}",
+        )
+        warnings += 1
+    elif not plugin_link.exists() and not plugin_link.is_symlink():
+        _doctor_row(
+            "warn",
+            "ComfyClaw-Sync plugin",
+            "not installed — run `comfyclaw install-node`",
+        )
+        warnings += 1
+    else:
+        bundled = _bundled_custom_node().resolve()
+        if plugin_link.is_symlink():
+            target = plugin_link.resolve()
+            if target == bundled:
+                _doctor_row("ok", "ComfyClaw-Sync plugin", "symlinked to this install")
+            else:
+                _doctor_row(
+                    "warn",
+                    "ComfyClaw-Sync plugin",
+                    f"symlinked to a different install ({target})",
+                )
+                warnings += 1
+        else:
+            _doctor_row(
+                "warn",
+                "ComfyClaw-Sync plugin",
+                f"installed as copy (not symlink) at {plugin_link}",
+            )
+            warnings += 1
+
+    # ── 6. Sync port free ────────────────────────────────────────────────
+    sync_port = _env_int("COMFYCLAW_SYNC_PORT", 8765)
+    try:
+        # Try lsof first (descriptive); fall back to a TCP probe.
+        proc = subprocess.run(
+            ["lsof", "-nP", "-iTCP:" + str(sync_port), "-sTCP:LISTEN", "-Fpc"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if proc.stdout.strip():
+            # Parse lsof -F output: lines like "p<pid>" + "c<command>"
+            lines = proc.stdout.strip().splitlines()
+            pid = next((line[1:] for line in lines if line.startswith("p")), "?")
+            cmd = next((line[1:] for line in lines if line.startswith("c")), "?")
+            _doctor_row(
+                "warn",
+                f"Sync port {sync_port}",
+                f"held by {cmd} (pid {pid}) — stop it before `comfyclaw serve`",
+            )
+            warnings += 1
+        else:
+            _doctor_row("ok", f"Sync port {sync_port}", "free")
+    except Exception:
+        # If lsof unavailable, do a best-effort TCP probe.
+        import socket
+
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(0.5)
+                sock.bind(("127.0.0.1", sync_port))
+                _doctor_row("ok", f"Sync port {sync_port}", "free")
+        except OSError:
+            _doctor_row("warn", f"Sync port {sync_port}", "in use")
+            warnings += 1
+
+    # ── 7. Bundled skills loadable ───────────────────────────────────────
+    try:
+        from .skill_manager import SkillsRegistry
+
+        reg = SkillsRegistry(quiet=True)
+        n = len(reg.skill_names)
+        _doctor_row("ok", "Bundled skills", f"{n} loaded")
+    except Exception as exc:
+        _doctor_row("fail", "Bundled skills", f"failed to load: {exc}")
+        critical_failures += 1
+
+    # ── 8. websockets package (needed for sync) ──────────────────────────
+    try:
+        import websockets  # noqa: F401
+
+        _doctor_row("ok", "websockets package", "installed")
+    except ImportError:
+        _doctor_row(
+            "warn",
+            "websockets package",
+            "missing — install with `pip install 'comfyclaw[sync]'`",
+        )
+        warnings += 1
+
+    # ── Summary ──────────────────────────────────────────────────────────
+    print()
+    if critical_failures == 0 and warnings == 0:
+        print("[doctor] ✅ All checks passed. Ready to `comfyclaw serve`.")
+        sys.exit(0)
+    elif critical_failures == 0:
+        print(
+            f"[doctor] ⚠  {warnings} warning(s) — ComfyClaw should still work, "
+            f"but fix these for the best experience."
+        )
+        sys.exit(0)
+    else:
+        print(
+            f"[doctor] ❌ {critical_failures} critical issue(s), {warnings} warning(s). "
+            f"Fix the critical ones before running `comfyclaw serve` or `comfyclaw run`."
+        )
+        sys.exit(1)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Argument parser
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -810,6 +1064,23 @@ def _build_parser() -> argparse.ArgumentParser:
 
     np_p = sub.add_parser("node-path", help="Print path to the bundled ComfyClaw-Sync plugin")
     np_p.set_defaults(func=_cmd_node_path)
+
+    doctor_p = sub.add_parser(
+        "doctor",
+        help="Pre-flight check (env, ComfyUI, plugin, port, skills)",
+        description=(
+            "Run a pre-flight check of your install. Exits 0 if there are no "
+            "critical failures; non-zero otherwise. Warnings are reported but "
+            "do not fail the check."
+        ),
+    )
+    doctor_p.add_argument(
+        "--comfyui-addr",
+        default=_server_addr(),
+        metavar="HOST:PORT",
+        help=("ComfyUI server address to probe. Default: COMFYUI_ADDR env var or 127.0.0.1:8188"),
+    )
+    doctor_p.set_defaults(func=_cmd_doctor)
 
     return parser
 

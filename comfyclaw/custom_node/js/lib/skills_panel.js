@@ -364,6 +364,35 @@ export function createSkillsTab({ getWs }) {
     _filter = $search.value.trim();
     _render();
   });
+  // Escape clears + blurs.
+  $search.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      if ($search.value) {
+        $search.value = "";
+        _filter = "";
+        _render();
+      } else {
+        $search.blur();
+      }
+    }
+  });
+  // Hint the shortcut in the placeholder so it's discoverable.
+  $search.placeholder = "Search skills…   (press /)";
+  // Global `/` to focus the search input. We only listen while this tab is in
+  // the DOM (createSkillsTab returns the root; the parent panel mounts /
+  // unmounts it). Skip if the event already targets an input/textarea so
+  // typing `/` inside a prompt box doesn't get hijacked.
+  function _onGlobalKey(e) {
+    if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (!root.isConnected) return;          // tab is not mounted
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    e.preventDefault();
+    $search.focus();
+    $search.select();
+  }
+  document.addEventListener("keydown", _onGlobalKey);
 
   // ── Source + state chip filters ─────────────────────────────────────────
   root.querySelectorAll(".cc-skill-source-chip").forEach((chip) => {

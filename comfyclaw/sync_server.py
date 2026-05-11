@@ -168,12 +168,14 @@ class SyncServer:
         api_key: str | None = None,
         server_address: str = "127.0.0.1:8188",
         skills_dir: str | None = None,
+        quiet: bool = False,
     ) -> None:
         self.port = port
         self.host = host
         self._model = model
         self._api_key = api_key
         self._server_address = server_address
+        self._quiet = quiet
 
         # Skills registry (lazy)
         self._skills_dir = skills_dir
@@ -765,12 +767,14 @@ class SyncServer:
                 reuse_port=True,
             ):
                 log.info("[SyncServer] Listening on ws://%s:%d", self.host, self.port)
-                print(f"[SyncServer] ✅ Listening on ws://{self.host}:{self.port}")
+                if not self._quiet:
+                    print(f"[SyncServer] ✅ Listening on ws://{self.host}:{self.port}")
                 self._started_ok = True
                 self._ready.set()
                 await self._stop_event.wait()
         except Exception as exc:
             log.error("[SyncServer] Failed to start: %s", exc)
+            # Errors are always shown.
             print(f"[SyncServer] ❌ Failed to start: {exc}")
             self._ready.set()
 

@@ -214,6 +214,7 @@ class SkillsRegistry:
         *,
         include_user_root: bool = True,
         extra_roots: list[str | Path] | None = None,
+        quiet: bool = False,
     ) -> None:
         # Roots are searched in order; later roots override earlier names.
         roots: list[tuple[Path, str]] = []  # (path, source_label)
@@ -237,11 +238,15 @@ class SkillsRegistry:
         # who see "skills empty" in the UI have no way to know which dirs
         # were actually scanned. flush=True so the line shows up immediately
         # even when stdout is a daemonized pipe (no TTY).
-        try:
-            paths = ", ".join(f"{label}={path}" for path, label in self._roots)
-            print(f"[SkillsRegistry] loaded {len(self._cache)} skills from: {paths}", flush=True)
-        except Exception:
-            pass
+        if not quiet:
+            try:
+                paths = ", ".join(f"{label}={path}" for path, label in self._roots)
+                print(
+                    f"[SkillsRegistry] loaded {len(self._cache)} skills from: {paths}",
+                    flush=True,
+                )
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Loading

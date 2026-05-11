@@ -3828,5 +3828,25 @@ app.registerExtension({
       _activeSyncClient = new SyncClient();
       _activeSyncClient.connect();
     }, 500);
+
+    // ── First-time onboarding toast ────────────────────────────────────
+    // Show a single welcome message the first time a user ever opens
+    // ComfyUI with ComfyClaw installed. The flag is keyed by version so
+    // that a future major release can re-onboard if the UX changes.
+    const _WELCOME_KEY = "comfyclaw_seen_welcome_v1";
+    if (!localStorage.getItem(_WELCOME_KEY)) {
+      // Wait until the badge + panel are actually in the DOM so the toast
+      // doesn't fire before the user can act on it.
+      setTimeout(() => {
+        showToast(
+          "🐾 Welcome to ComfyClaw. Type a prompt and click ▶ Generate, " +
+          "or open the Skills tab to see what the agent already knows.",
+          "info",
+          8000
+        );
+        try { localStorage.setItem(_WELCOME_KEY, String(Date.now())); }
+        catch (_) { /* private-mode storage may be unavailable; ignore */ }
+      }, 1800);
+    }
   },
 });
