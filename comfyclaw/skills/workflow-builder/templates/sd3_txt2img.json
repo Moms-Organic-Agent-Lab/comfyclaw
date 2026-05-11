@@ -1,0 +1,66 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {"title": "Load SD3"},
+    "inputs": {
+      "ckpt_name": "REPLACE_WITH_EXACT_FILENAME"
+    }
+  },
+  "2": {
+    "class_type": "CLIPTextEncode",
+    "_meta": {"title": "Positive Prompt"},
+    "inputs": {
+      "clip": ["1", 1],
+      "text": "REPLACE_WITH_POSITIVE_PROMPT"
+    }
+  },
+  "3": {
+    "class_type": "CLIPTextEncode",
+    "_meta": {"title": "Negative Prompt"},
+    "inputs": {
+      "clip": ["1", 1],
+      "text": "blurry, out of focus, low quality, noisy, watermark, text, ugly, deformed"
+    }
+  },
+  "4": {
+    "class_type": "EmptySD3LatentImage",
+    "_meta": {"title": "Empty Latent"},
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    }
+  },
+  "5": {
+    "class_type": "KSampler",
+    "_meta": {"title": "KSampler"},
+    "inputs": {
+      "model": ["1", 0],
+      "positive": ["2", 0],
+      "negative": ["3", 0],
+      "latent_image": ["4", 0],
+      "seed": 42,
+      "steps": 28,
+      "cfg": 4.5,
+      "sampler_name": "euler",
+      "scheduler": "sgm_uniform",
+      "denoise": 1.0
+    }
+  },
+  "6": {
+    "class_type": "VAEDecode",
+    "_meta": {"title": "VAE Decode"},
+    "inputs": {
+      "samples": ["5", 0],
+      "vae": ["1", 2]
+    }
+  },
+  "7": {
+    "class_type": "SaveImage",
+    "_meta": {"title": "Save Image"},
+    "inputs": {
+      "images": ["6", 0],
+      "filename_prefix": "ComfyClaw"
+    }
+  }
+}

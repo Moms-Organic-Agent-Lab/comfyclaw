@@ -1,0 +1,83 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "_meta": {"title": "Load Flux UNET"},
+    "inputs": {
+      "unet_name": "REPLACE_WITH_EXACT_FILENAME",
+      "weight_dtype": "fp8_e4m3fn"
+    }
+  },
+  "2": {
+    "class_type": "DualCLIPLoader",
+    "_meta": {"title": "Load CLIP"},
+    "inputs": {
+      "clip_name1": "REPLACE_WITH_CLIP_L_FILENAME",
+      "clip_name2": "REPLACE_WITH_T5XXL_FILENAME",
+      "type": "flux"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "_meta": {"title": "Load VAE"},
+    "inputs": {
+      "vae_name": "REPLACE_WITH_VAE_FILENAME"
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "_meta": {"title": "Positive Prompt"},
+    "inputs": {
+      "clip": ["2", 0],
+      "text": "REPLACE_WITH_POSITIVE_PROMPT"
+    }
+  },
+  "5": {
+    "class_type": "EmptySD3LatentImage",
+    "_meta": {"title": "Empty Latent"},
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    }
+  },
+  "6": {
+    "class_type": "FluxGuidance",
+    "_meta": {"title": "Flux Guidance"},
+    "inputs": {
+      "conditioning": ["4", 0],
+      "guidance": 3.5
+    }
+  },
+  "7": {
+    "class_type": "KSampler",
+    "_meta": {"title": "KSampler"},
+    "inputs": {
+      "model": ["1", 0],
+      "positive": ["6", 0],
+      "negative": ["4", 0],
+      "latent_image": ["5", 0],
+      "seed": 42,
+      "steps": 20,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "_meta": {"title": "VAE Decode"},
+    "inputs": {
+      "samples": ["7", 0],
+      "vae": ["3", 0]
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "_meta": {"title": "Save Image"},
+    "inputs": {
+      "images": ["8", 0],
+      "filename_prefix": "ComfyClaw"
+    }
+  }
+}

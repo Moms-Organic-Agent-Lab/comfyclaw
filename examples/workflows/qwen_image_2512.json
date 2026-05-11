@@ -1,0 +1,101 @@
+{
+  "219": {
+    "class_type": "CLIPLoader",
+    "_meta": {"title": "CLIPLoader"},
+    "inputs": {
+      "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    }
+  },
+  "220": {
+    "class_type": "VAELoader",
+    "_meta": {"title": "VAELoader"},
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    }
+  },
+  "221": {
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {"title": "LoRA Loader (optional Lightning 4-step)"},
+    "inputs": {
+      "model": ["226", 0],
+      "lora_name": "Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors",
+      "strength_model": 1.0
+    }
+  },
+  "222": {
+    "class_type": "ModelSamplingAuraFlow",
+    "_meta": {"title": "ModelSamplingAuraFlow"},
+    "inputs": {
+      "model": ["221", 0],
+      "shift": 3.0
+    }
+  },
+  "223": {
+    "class_type": "KSampler",
+    "_meta": {"title": "KSampler"},
+    "inputs": {
+      "model": ["222", 0],
+      "positive": ["227", 0],
+      "negative": ["228", 0],
+      "latent_image": ["232", 0],
+      "seed": 42,
+      "control_after_generate": "randomize",
+      "steps": 4,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    }
+  },
+  "226": {
+    "class_type": "UNETLoader",
+    "_meta": {"title": "UNETLoader"},
+    "inputs": {
+      "unet_name": "qwen_image_2512_fp8_e4m3fn.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "227": {
+    "class_type": "CLIPTextEncode",
+    "_meta": {"title": "Positive Prompt"},
+    "inputs": {
+      "clip": ["219", 0],
+      "text": "a beautiful landscape"
+    }
+  },
+  "228": {
+    "class_type": "CLIPTextEncode",
+    "_meta": {"title": "Negative Prompt"},
+    "inputs": {
+      "clip": ["219", 0],
+      "text": "低分辨率，低画质，肢体畸形，手指畸形，画面过饱和，蜡像感，人脸无细节，过度光滑，画面具有AI感。构图混乱。文字模糊，扭曲"
+    }
+  },
+  "231": {
+    "class_type": "VAEDecode",
+    "_meta": {"title": "VAEDecode"},
+    "inputs": {
+      "samples": ["223", 0],
+      "vae": ["220", 0]
+    }
+  },
+  "232": {
+    "class_type": "EmptySD3LatentImage",
+    "_meta": {"title": "EmptySD3LatentImage"},
+    "inputs": {
+      "width": 1328,
+      "height": 1328,
+      "batch_size": 1
+    }
+  },
+  "60": {
+    "class_type": "SaveImage",
+    "_meta": {"title": "Save Image"},
+    "inputs": {
+      "filename_prefix": "Qwen-Image-2512",
+      "images": ["231", 0]
+    }
+  }
+}

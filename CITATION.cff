@@ -1,0 +1,68 @@
+cff-version: 1.2.0
+title: "ComfyClaw: An Agentic Harness for Skill-Evolving Image Generation Workflows"
+message: >-
+  If you use this software in academic work, please cite the accompanying
+  paper. Update this entry with the venue once camera-ready details are
+  finalized.
+type: software
+license: MIT
+repository-code: "https://github.com/Moms-Organic-Agent-Lab/comfyclaw"
+url: "https://github.com/Moms-Organic-Agent-Lab/comfyclaw"
+version: "0.1.0"
+date-released: "2026-05-11"
+keywords:
+  - llm-agent
+  - image-generation
+  - comfyui
+  - agent-skills
+  - workflow-evolution
+  - vision-language-model
+authors:
+  - family-names: Li
+    given-names: Zongxia
+  - family-names: Liu
+    given-names: Dawei
+  - family-names: Chen
+    given-names: Jingxi
+  - family-names: Wu
+    given-names: Xiyang
+  - family-names: Liu
+    given-names: Fuxiao
+  - family-names: Zhou
+    given-names: Yuhang
+  - family-names: Xie
+    given-names: Jing
+  - family-names: Wu
+    given-names: Xiaomin
+  - family-names: Sun
+    given-names: Lichao
+preferred-citation:
+  type: article
+  title: "An Agentic Harness for Skill-Evolving Image Generation Workflows"
+  authors:
+    - family-names: Li
+      given-names: Zongxia
+    - family-names: Liu
+      given-names: Dawei
+    - family-names: Chen
+      given-names: Jingxi
+    - family-names: Wu
+      given-names: Xiyang
+    - family-names: Liu
+      given-names: Fuxiao
+    - family-names: Zhou
+      given-names: Yuhang
+    - family-names: Xie
+      given-names: Jing
+    - family-names: Wu
+      given-names: Xiaomin
+    - family-names: Sun
+      given-names: Lichao
+  year: 2026
+  # TODO: fill in once accepted / posted
+  # journal:  ""
+  # volume:   ""
+  # number:   ""
+  # pages:    ""
+  # doi:      ""
+  # url:      ""

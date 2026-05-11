@@ -1,0 +1,87 @@
+# Pre-commit hooks — mirrors the GitHub CI checks that can run locally.
+#
+# Install (one-time per clone):
+#   uv run pre-commit install                    # hooks for git commit
+#   uv run pre-commit install --hook-type pre-push  # hooks for git push
+#
+# Run all hooks manually:
+#   uv run pre-commit run --all-files            # commit-stage hooks
+#   uv run pre-commit run --all-files --hook-stage push  # push-stage hooks
+#
+# Skip for a single emergency commit/push (use sparingly):
+#   git commit --no-verify -m "..."
+#   git push --no-verify
+
+# ── Stage 1: pre-commit  (fast — runs on every `git commit`) ─────────────────
+#
+#  Mirrors CI jobs: lint (ruff check + ruff format)
+#  Plus general file-hygiene checks that catch trivial issues early.
+
+repos:
+  # ── General file hygiene ──────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # Remove trailing whitespace (except Markdown where it signals <br>)
+      - id: trailing-whitespace
+        exclude: '\.md$'
+      # Ensure every file ends with a newline
+      - id: end-of-file-fixer
+      # Validate YAML, TOML, JSON syntax
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      # Catch leftover merge-conflict markers (<<<<<<<, =======, >>>>>>>)
+      - id: check-merge-conflict
+      # Prevent accidentally committing large binary/model files (>= 1 MB)
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      # Catch accidental pdb / breakpoint() calls left in code
+      - id: debug-statements
+      # Normalize line endings to LF on all platforms
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  # ── Ruff lint + format  (mirrors CI "Lint" job) ───────────────────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.4
+    hooks:
+      # 1. Fix auto-fixable issues (import order, unused imports, …)
+      #    --exit-non-zero-on-fix aborts the commit and shows what was changed,
+      #    so you can review the auto-fix before re-staging and retrying.
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      # 2. Enforce consistent code style (quotes, indentation, trailing commas)
+      - id: ruff-format
+
+# ── Stage 2: pre-push  (slower — runs on every `git push`) ──────────────────
+#
+#  Mirrors CI jobs: test (pytest) + build (uv build)
+#  These take 30–60 s but catch regressions before they reach GitHub.
+#
+#  Requires: uv run pre-commit install --hook-type pre-push
+
+  # ── Full test suite  (mirrors CI "Test" job) ─────────────────────────────
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest (full suite)
+        # --frozen: skip any sync/lock-update so no tracked files (uv.lock)
+        # are touched during the hook run, preventing false "files modified"
+        # failures. Run `uv sync --group dev` manually after dep changes.
+        entry: uv run --frozen pytest
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+
+  # ── Wheel build  (mirrors CI "Build wheel" job) ───────────────────────────
+  - repo: local
+    hooks:
+      - id: build-wheel
+        name: uv build (wheel)
+        entry: uv build
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

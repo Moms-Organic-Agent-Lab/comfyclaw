@@ -1,0 +1,66 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {"title": "Load Checkpoint"},
+    "inputs": {
+      "ckpt_name": "dreamshaper8_lcm.safetensors"
+    }
+  },
+  "2": {
+    "class_type": "CLIPTextEncode",
+    "_meta": {"title": "CLIP Text Encode (Positive)"},
+    "inputs": {
+      "clip": ["1", 1],
+      "text": "a beautiful landscape, masterpiece, high quality"
+    }
+  },
+  "3": {
+    "class_type": "CLIPTextEncode",
+    "_meta": {"title": "CLIP Text Encode (Negative)"},
+    "inputs": {
+      "clip": ["1", 1],
+      "text": "ugly, blurry, low quality, watermark, nsfw"
+    }
+  },
+  "4": {
+    "class_type": "EmptyLatentImage",
+    "_meta": {"title": "Empty Latent Image"},
+    "inputs": {
+      "batch_size": 1,
+      "height": 512,
+      "width": 512
+    }
+  },
+  "5": {
+    "class_type": "KSampler",
+    "_meta": {"title": "KSampler"},
+    "inputs": {
+      "cfg": 2.0,
+      "denoise": 1.0,
+      "latent_image": ["4", 0],
+      "model": ["1", 0],
+      "negative": ["3", 0],
+      "positive": ["2", 0],
+      "sampler_name": "lcm",
+      "scheduler": "sgm_uniform",
+      "seed": 42,
+      "steps": 6
+    }
+  },
+  "6": {
+    "class_type": "VAEDecode",
+    "_meta": {"title": "VAE Decode"},
+    "inputs": {
+      "samples": ["5", 0],
+      "vae": ["1", 2]
+    }
+  },
+  "7": {
+    "class_type": "SaveImage",
+    "_meta": {"title": "Save Image"},
+    "inputs": {
+      "filename_prefix": "ComfyClaw",
+      "images": ["6", 0]
+    }
+  }
+}

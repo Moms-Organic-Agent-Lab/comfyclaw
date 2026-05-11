@@ -1,0 +1,120 @@
+# ─── Environment & secrets ────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.key
+secrets/
+node_modules/
+
+# ─── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+MANIFEST
+.installed.cfg
+lib/
+lib64/
+sdist/
+wheels/
+share/python-wheels/
+*.whl
+# ComfyUI-Sync custom node ships modular JS under js/lib/ — un-ignore it so
+# the Python-distribution `lib/` rule above doesn't swallow frontend code.
+!comfyclaw/custom_node/js/lib/
+!comfyclaw/custom_node/js/lib/**
+
+# ─── ComfyClaw custom-node frontend build outputs ─────────────────────────────
+# `custom_node/ui/` holds an in-progress React rebuild. Build outputs should
+# never be committed; source files can be added explicitly when the rebuild
+# is revived (commit a `package.json` first so the source structure has a
+# clear consumer).
+comfyclaw/custom_node/ui/src/output.css
+comfyclaw/custom_node/ui/src/output.*.css
+comfyclaw/custom_node/ui/node_modules/
+comfyclaw/custom_node/ui/.vite/
+comfyclaw/custom_node/ui/dist/
+
+# The Vite-hashed bundle in `custom_node/dist/cc_web/` is already swallowed
+# by the generic `dist/` rule above and currently isn't loaded at runtime
+# (no JS or Python import references it). If you want to ship pre-built
+# bundles inside the package, add an explicit un-ignore exception here.
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.virtualenvs/
+
+# ─── uv ───────────────────────────────────────────────────────────────────────
+# Commit uv.lock for applications; omit for libraries (we omit for now)
+# uv.lock
+
+# ─── Testing ──────────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+coverage/
+htmlcov/
+.tox/
+.nox/
+nosetests.xml
+*.cover
+
+# ─── Linting / type-checking ──────────────────────────────────────────────────
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+.pyre/
+
+# ─── Editors ──────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# ─── macOS ────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+Icon?
+
+# ─── Jupyter ──────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ─── ComfyClaw runtime outputs ────────────────────────────────────────────────
+comfyclaw_output/
+outputs/
+*.png
+*.jpg
+*.jpeg
+*.webp
+# (allow example / paper figures committed deliberately)
+!docs/images/*.png
+!assets/*.png
+!assets/*.jpg
+!assets/*.jpeg
+!assets/*.webp
+
+# ─── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
