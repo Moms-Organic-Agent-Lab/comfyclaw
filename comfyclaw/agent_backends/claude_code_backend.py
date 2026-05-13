@@ -186,6 +186,10 @@ def _run_native(
     if model:
         argv += ["--model", model]
 
+    # The `claude` script is `#!/usr/bin/env node` so co-locate its bin dir
+    # on PATH; otherwise the kernel returns 127 before the script can start.
+    from .base import _env_with_claude_path
+
     try:
         proc = subprocess.Popen(
             argv,
@@ -194,7 +198,7 @@ def _run_native(
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
-            env=os.environ.copy(),
+            env=_env_with_claude_path(bin_path),
         )
     except FileNotFoundError as exc:
         raise _NativeUnsupported(f"binary not found: {exc}") from exc

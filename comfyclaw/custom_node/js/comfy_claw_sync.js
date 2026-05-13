@@ -48,6 +48,7 @@ import { createBackendPicker }  from "./lib/backend_picker.js";
 import { createSkillsTab }      from "./lib/skills_panel.js";
 import { createHistoryTab }     from "./lib/history_panel.js";
 import { buildScoreboardCard }  from "./lib/scoreboard.js";
+import { openModal }            from "./lib/modal.js";
 
 injectStyles();
 
@@ -210,6 +211,19 @@ function promptConfig() {
 
 let _feedbackPanel = null;
 let _activeSyncClient = null;
+
+// ── Setup modals (singletons; module-level so the WS handler can reach them)
+let _installModal = null;
+let _authModal    = null;
+
+function _wsOpen() {
+  return _activeSyncClient?.ws?.readyState === WebSocket.OPEN;
+}
+function _wsSend(payload) {
+  if (!_wsOpen()) return false;
+  _activeSyncClient.ws.send(JSON.stringify(payload));
+  return true;
+}
 
 function createFeedbackPanel() {
   const overlay = document.createElement("div");
@@ -2392,12 +2406,13 @@ function createComfyClawPanel() {
       appendAgentLog({ event_type: "assistant_stream", content: "", timestamp: Date.now() / 1000, message_id: msgId });
       const _cpp = _activeProvPayload();
       _activeSyncClient.ws.send(JSON.stringify({
-        type:       "chat_message",
-        message_id: msgId,
-        messages:   _chatHistory,
-        model:      panel.querySelector("#comfyclaw-gen-model").value.trim() || undefined,
-        api_key:    _cpp.api_key  || panel.querySelector("#comfyclaw-gen-apikey").value.trim() || undefined,
-        api_base:   _cpp.api_base || undefined,
+        type:          "chat_message",
+        message_id:    msgId,
+        messages:      _chatHistory,
+        model:         panel.querySelector("#comfyclaw-gen-model").value.trim() || undefined,
+        api_key:       _cpp.api_key  || panel.querySelector("#comfyclaw-gen-apikey").value.trim() || undefined,
+        api_base:      _cpp.api_base || undefined,
+        agent_backend: _activeBackendId(),
       }));
     }
   }
@@ -2540,6 +2555,25 @@ function createComfyClawPanel() {
   }
 
   let _bePopover = null;
+
+  // Color-coded mini-dot for the popover rows; mirrors the picker's logic.
+  function _stateDot(state) {
+    let color = "var(--cc-fg-faint)";
+    if (state === "ok") color = "var(--cc-accent-green)";
+    else if (state === "needs_auth") color = "var(--cc-accent, #f0a500)";
+    else if (state === "needs_install" || state === "error") color = "var(--cc-accent-red)";
+    return `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;
+                          background:${color};margin-right:6px;"></span>`;
+  }
+
+  function _stateLabel(state) {
+    if (state === "needs_install") return "Not installed";
+    if (state === "needs_auth")    return "Not signed in";
+    if (state === "unsupported")   return "Unavailable";
+    if (state === "error")         return "Error";
+    return "";
+  }
+
   function _openBackendPopover() {
     if (!beChip) return;
     if (!_bePopover) {
@@ -2556,9 +2590,45 @@ function createComfyClawPanel() {
     let html = `<div class="cc-popover-section-label">Agent backend</div>`;
     for (const [id, meta] of Object.entries(BACKEND_META)) {
       const active = id === curId;
-      html += `<div class="cc-popover-item" data-be="${id}"${active ? ' data-active="1"' : ""}>
+      const st = _backendPickerRef?.status?.(id) || null;
+      const state = st?.state || "ok";
+      const detail = st?.detail || meta.label;
+      const isUsable = state === "ok";
+      const subLabel = _stateLabel(state);
+
+      let actionBtn = "";
+      if (state === "needs_install" && st?.can_install) {
+        actionBtn = `<button class="cc-popover-action" data-action="install" data-be="${id}"
+                              style="margin-left:auto;font-size:10px;padding:2px 8px;
+                                     background:var(--cc-accent);color:var(--cc-bg);
+                                     border:none;border-radius:6px;cursor:pointer;">
+                       Install
+                     </button>`;
+      } else if (state === "needs_auth") {
+        actionBtn = `<button class="cc-popover-action" data-action="signin" data-be="${id}"
+                              style="margin-left:auto;font-size:10px;padding:2px 8px;
+                                     background:var(--cc-accent);color:var(--cc-bg);
+                                     border:none;border-radius:6px;cursor:pointer;">
+                       Sign in
+                     </button>`;
+      }
+
+      const subline = subLabel
+        ? `<div style="font-size:10px;color:var(--cc-fg-muted);margin-top:1px;">
+             ${_stateDot(state)}${subLabel}
+           </div>`
+        : "";
+
+      html += `<div class="cc-popover-item${isUsable ? "" : " cc-popover-item-locked"}"
+                    data-be="${id}"${active ? ' data-active="1"' : ""}
+                    title="${detail.replace(/"/g, "&quot;")}"
+                    style="display:flex;align-items:center;gap:8px;padding:6px 10px;">
                  <span class="cc-popover-icon">${active ? "✓" : meta.icon}</span>
-                 <span>${meta.label}</span>
+                 <span style="flex:1;min-width:0;">
+                   <div>${meta.label}</div>
+                   ${subline}
+                 </span>
+                 ${actionBtn}
                </div>`;
     }
     _bePopover.innerHTML = html;
@@ -2567,10 +2637,38 @@ function createComfyClawPanel() {
     _bePopover.style.top = `${r.top - 8}px`;
     _bePopover.style.transform = "translateY(-100%)";
     _bePopover.dataset.open = "1";
+
+    // Action buttons (Install / Sign in) take priority and stopPropagation
+    // so they don't also trigger the row's select-this-backend click.
+    _bePopover.querySelectorAll(".cc-popover-action").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.be;
+        const action = btn.dataset.action;
+        _bePopover.dataset.open = "0";
+        if (action === "install") _openClaudeInstallModal(id);
+        else if (action === "signin") _openClaudeAuthModal(id);
+      });
+    });
+
     _bePopover.querySelectorAll(".cc-popover-item").forEach((item) => {
-      item.addEventListener("click", () => {
+      item.addEventListener("click", (e) => {
+        if (e.target.closest(".cc-popover-action")) return;
         const id = item.dataset.be;
-        // Drive the legacy backend picker (single source of truth).
+        const st = _backendPickerRef?.status?.(id) || null;
+        if (st && st.state && st.state !== "ok") {
+          // Don't activate an unusable backend; surface a hint instead.
+          showToast(
+            st.state === "needs_install"
+              ? "Install Claude Code first."
+              : st.state === "needs_auth"
+                ? "Sign in to Claude Code first."
+                : "This backend is unavailable.",
+            "warning",
+            2200,
+          );
+          return;
+        }
         if (_backendPickerRef?.set) _backendPickerRef.set(id);
         else localStorage.setItem("comfyclaw_agent_backend", id);
         _refreshBackendChip();
@@ -2578,6 +2676,242 @@ function createComfyClawPanel() {
       });
     });
   }
+
+  function _openClaudeInstallModal(backendId) {
+    if (backendId !== "claude-code") return;
+    if (_installModal?.isOpen?.()) return;
+
+    const logEl = document.createElement("pre");
+    logEl.style.cssText = `
+      margin:0;padding:10px;background:var(--cc-surface-tint);
+      border:1px solid var(--cc-border);border-radius:6px;
+      font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;
+      line-height:1.5;max-height:300px;overflow:auto;white-space:pre-wrap;
+      word-break:break-all;color:var(--cc-fg);
+    `;
+    const statusEl = document.createElement("div");
+    statusEl.style.cssText = "font-size:11px;color:var(--cc-fg-muted);margin-top:10px;";
+    statusEl.textContent = "Starting installer…";
+
+    const explainer = document.createElement("div");
+    explainer.style.cssText = "font-size:11px;color:var(--cc-fg-muted);margin-bottom:8px;line-height:1.5;";
+    explainer.innerHTML = `
+      This will install the Claude Code CLI by running the official installer.
+      The installer is bundled by Anthropic; no other command will be executed.
+    `;
+
+    const container = document.createElement("div");
+    container.appendChild(explainer);
+    container.appendChild(logEl);
+    container.appendChild(statusEl);
+
+    _installModal = openModal({
+      title: "Install Claude Code",
+      subtitle: "Streaming installer output",
+      body: container,
+      width: 640,
+      onClose: () => {
+        if (_installModal?._inFlight) {
+          _wsSend({ type: "backend_install_cancel", backend: backendId });
+        }
+        _installModal = null;
+      },
+    });
+    _installModal._inFlight = true;
+    _installModal._appendLine = (level, text) => {
+      const line = document.createElement("div");
+      if (level === "error")       line.style.color = "var(--cc-accent-red)";
+      else if (level === "info")   line.style.color = "var(--cc-fg-muted)";
+      line.textContent = text;
+      logEl.appendChild(line);
+      logEl.scrollTop = logEl.scrollHeight;
+    };
+    _installModal._setStatus = (text, kind) => {
+      statusEl.textContent = text;
+      statusEl.style.color =
+        kind === "error" ? "var(--cc-accent-red)" :
+        kind === "ok"    ? "var(--cc-accent-green)" :
+        "var(--cc-fg-muted)";
+    };
+
+    if (!_wsSend({ type: "backend_install_start", backend: backendId })) {
+      _installModal._setStatus("Sync server is not connected.", "error");
+      _installModal._inFlight = false;
+    }
+  }
+
+  function _openClaudeAuthModal(backendId) {
+    if (backendId !== "claude-code") return;
+    if (_authModal?.isOpen?.()) return;
+
+    const stepEl = document.createElement("div");
+    stepEl.style.cssText = "font-size:12px;line-height:1.6;color:var(--cc-fg);";
+    const statusEl = document.createElement("div");
+    statusEl.style.cssText = "font-size:11px;color:var(--cc-fg-muted);margin-top:14px;";
+    statusEl.textContent = "Starting sign-in…";
+
+    const container = document.createElement("div");
+    container.appendChild(stepEl);
+    container.appendChild(statusEl);
+
+    _authModal = openModal({
+      title: "Sign in to Claude",
+      subtitle: "Browser-based sign-in (no terminal needed)",
+      body: container,
+      width: 560,
+      onClose: () => {
+        if (_authModal?._inFlight) {
+          _wsSend({ type: "backend_auth_cancel", backend: backendId });
+        }
+        _authModal = null;
+      },
+    });
+    _authModal._inFlight = true;
+    _authModal._backendId = backendId;
+
+    _authModal._showWaiting = () => {
+      stepEl.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span class="cc-spinner" style="
+            width:14px;height:14px;border:2px solid var(--cc-border);
+            border-top-color:var(--cc-accent);border-radius:50%;
+            animation:cc-spin 0.8s linear infinite;"></span>
+          <span>Asking Claude for a sign-in link…</span>
+        </div>
+      `;
+    };
+
+    _authModal._showSignInLink = (url) => {
+      _authModal._oauthUrl = url;
+      stepEl.innerHTML = `
+        <div style="margin-bottom:14px;">
+          <strong>Step 1 — Sign in</strong>
+          <div style="font-size:11px;color:var(--cc-fg-muted);margin-top:4px;">
+            Click the button below. It opens Claude.ai in a new tab where you can sign in.
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;">
+          <a class="cc-auth-open-link" href="${url}" target="_blank" rel="noopener"
+             style="background:var(--cc-accent);color:var(--cc-bg);padding:8px 14px;
+                    border-radius:8px;text-decoration:none;font-weight:600;
+                    font-size:12px;display:inline-flex;align-items:center;gap:6px;">
+            Open Claude sign-in &rarr;
+          </a>
+          <button class="cc-auth-copy-link" style="background:transparent;
+                  border:1px solid var(--cc-border);color:var(--cc-fg);
+                  padding:8px 14px;border-radius:8px;font-size:12px;cursor:pointer;">
+            Copy URL
+          </button>
+        </div>
+        <div style="margin-bottom:8px;">
+          <strong>Step 2 — Paste the redirect URL</strong>
+          <div style="font-size:11px;color:var(--cc-fg-muted);margin-top:4px;line-height:1.5;">
+            After signing in, your browser will show an error page (that's expected on a
+            remote server). <strong>Copy the URL from your browser's address bar</strong>
+            and paste it below.
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:stretch;">
+          <input class="cc-auth-paste" type="text"
+                 placeholder="https://...?code=..."
+                 spellcheck="false" autocomplete="off"
+                 style="flex:1;padding:8px 10px;background:var(--cc-surface-tint);
+                        color:var(--cc-fg);border:1px solid var(--cc-border);
+                        border-radius:8px;font-family:ui-monospace,Menlo,Consolas,monospace;
+                        font-size:11px;">
+          <button class="cc-auth-submit"
+                  style="background:var(--cc-accent);color:var(--cc-bg);
+                         border:none;border-radius:8px;padding:8px 16px;
+                         font-weight:600;font-size:12px;cursor:pointer;">
+            Submit
+          </button>
+        </div>
+      `;
+      const $copy   = stepEl.querySelector(".cc-auth-copy-link");
+      const $input  = stepEl.querySelector(".cc-auth-paste");
+      const $submit = stepEl.querySelector(".cc-auth-submit");
+      $copy?.addEventListener("click", () => {
+        navigator.clipboard?.writeText(url).then(
+          () => showToast("URL copied", "success", 1500),
+          () => showToast("Could not access clipboard", "error", 2000),
+        );
+      });
+      const submit = () => {
+        const v = $input.value.trim();
+        if (!v) { $input.focus(); return; }
+        _wsSend({ type: "backend_auth_paste_code", backend: backendId, url: v });
+        _authModal._setStatus("Submitting redirect URL…", "info");
+      };
+      $submit?.addEventListener("click", submit);
+      $input?.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); submit(); }
+      });
+      setTimeout(() => $input?.focus(), 50);
+    };
+
+    _authModal._setStatus = (text, kind) => {
+      statusEl.textContent = text;
+      statusEl.style.color =
+        kind === "error" ? "var(--cc-accent-red)" :
+        kind === "ok"    ? "var(--cc-accent-green)" :
+        "var(--cc-fg-muted)";
+    };
+
+    _authModal._showSuccess = (detail) => {
+      stepEl.innerHTML = `
+        <div style="display:flex;align-items:center;gap:10px;color:var(--cc-accent-green);">
+          <span style="font-size:18px;">✓</span>
+          <div>
+            <div style="font-weight:600;">Signed in to Claude</div>
+            <div style="font-size:11px;color:var(--cc-fg-muted);margin-top:2px;">
+              ${escHtml(detail || "")}
+            </div>
+          </div>
+        </div>
+      `;
+      _authModal._setStatus("You can close this and start generating.", "ok");
+    };
+
+    _authModal._showFailure = (detail) => {
+      stepEl.innerHTML = `
+        <div style="display:flex;align-items:flex-start;gap:10px;color:var(--cc-accent-red);">
+          <span style="font-size:18px;">✕</span>
+          <div>
+            <div style="font-weight:600;">Sign-in failed</div>
+            <div style="font-size:11px;color:var(--cc-fg-muted);margin-top:4px;
+                        line-height:1.5;word-break:break-word;">
+              ${escHtml(detail || "")}
+            </div>
+            <button class="cc-auth-retry"
+                    style="margin-top:10px;background:var(--cc-accent);color:var(--cc-bg);
+                           border:none;border-radius:6px;padding:6px 14px;font-size:12px;
+                           font-weight:600;cursor:pointer;">
+              Try again
+            </button>
+          </div>
+        </div>
+      `;
+      stepEl.querySelector(".cc-auth-retry")?.addEventListener("click", () => {
+        _authModal?.close?.();
+        setTimeout(() => _openClaudeAuthModal(backendId), 150);
+      });
+    };
+
+    _authModal._showWaiting();
+    if (!_wsSend({ type: "backend_auth_start", backend: backendId, auth_method: "claudeai" })) {
+      _authModal._setStatus("Sync server is not connected.", "error");
+      _authModal._inFlight = false;
+    }
+  }
+
+  // Expose for use from the picker's action callback (it isn't in scope here
+  // when createBackendPicker is called below, so we cache them on the panel
+  // element via a custom event).
+  panel.addEventListener("cc-backend-action", (e) => {
+    const { id, action } = e.detail || {};
+    if (action === "install") _openClaudeInstallModal(id);
+    else if (action === "signin") _openClaudeAuthModal(id);
+  });
   beChip?.addEventListener("click", (e) => {
     e.stopPropagation();
     if (_bePopover?.dataset?.open === "1") _bePopover.dataset.open = "0";
@@ -2878,6 +3212,15 @@ function _augmentPanelWithTabs(panel) {
         // When backend changes through any path, refresh the composer chip.
         const chip = panel.querySelector("#cc-composer-backend-chip");
         if (chip) chip.dispatchEvent(new CustomEvent("cc-backend-refresh"));
+      },
+      onAction: (id, action) => {
+        // The picker fires this when an Install/Sign-in affordance is clicked
+        // from any UI surface that uses the picker. We re-dispatch into the
+        // panel's namespace so the modal handlers (closures over `panel`) can
+        // pick it up regardless of which UI the click originated from.
+        panel.dispatchEvent(
+          new CustomEvent("cc-backend-action", { detail: { id, action } }),
+        );
       },
     });
     _backendPickerRef = picker;
@@ -3356,12 +3699,66 @@ class SyncClient {
       _skillsTabRef?.onMessage(msg);
     } else if (msg.type === "agent_backends") {
       const map = {};
-      for (const b of (msg.backends || [])) map[b.name] = !!b.available;
+      for (const b of (msg.backends || [])) {
+        // New protocol: pass the full status object so the picker can show
+        // tri-state availability (ok / needs_auth / needs_install / …).
+        map[b.name] = {
+          state: b.state || (b.available ? "ok" : "unsupported"),
+          detail: b.detail || "",
+          binary_path: b.binary_path || "",
+          auth_method: b.auth_method || "",
+          can_install: !!b.can_install,
+        };
+      }
       _backendPickerRef?.setAvailability(map);
       // Reflect any auto-demotion (e.g., saved CLI backend is missing on this
       // host → picker falls back to litellm) into the composer chip.
       document.getElementById("cc-composer-backend-chip")
               ?.dispatchEvent(new CustomEvent("cc-backend-refresh"));
+
+    // ── Backend setup flows: install + OAuth ─────────────────────────────────
+    } else if (msg.type === "backend_install_progress") {
+      // Streamed line from the installer subprocess.
+      if (_installModal?.isOpen?.() && typeof _installModal._appendLine === "function") {
+        _installModal._appendLine(msg.level || "stdout", msg.line || "");
+      }
+    } else if (msg.type === "backend_install_complete") {
+      if (_installModal?.isOpen?.()) {
+        _installModal._inFlight = false;
+        if (msg.success) {
+          _installModal._setStatus("✓ Installed. You can now sign in.", "ok");
+          _installModal._appendLine?.("info", "[install] Complete.");
+        } else {
+          _installModal._setStatus(`✕ Install failed: ${msg.error || msg.detail || "unknown error"}`, "error");
+          _installModal._appendLine?.("error", `[install] ${msg.error || msg.detail || "failed"}`);
+        }
+      }
+      // Re-probe so the chip flips color and the popover lifts the "Install" CTA.
+      if (_activeSyncClient?.ws?.readyState === WebSocket.OPEN) {
+        _activeSyncClient.ws.send(JSON.stringify({ type: "list_agent_backends" }));
+      }
+    } else if (msg.type === "backend_auth_url") {
+      if (_authModal?.isOpen?.() && typeof _authModal._showSignInLink === "function") {
+        _authModal._showSignInLink(msg.url || "");
+        _authModal._setStatus("Waiting for you to paste the redirect URL…", "info");
+      }
+    } else if (msg.type === "backend_auth_progress") {
+      if (_authModal?.isOpen?.() && typeof _authModal._setStatus === "function") {
+        _authModal._setStatus(msg.message || "", msg.level === "error" ? "error" : "info");
+      }
+    } else if (msg.type === "backend_auth_complete") {
+      if (_authModal?.isOpen?.()) {
+        _authModal._inFlight = false;
+        if (msg.success) {
+          _authModal._showSuccess?.(msg.detail || "Signed in");
+        } else {
+          _authModal._showFailure?.(msg.error || msg.detail || "Sign-in failed.");
+        }
+      }
+      if (_activeSyncClient?.ws?.readyState === WebSocket.OPEN) {
+        _activeSyncClient.ws.send(JSON.stringify({ type: "list_agent_backends" }));
+      }
+
     } else if (msg.type === "generation_error") {
       setGenRunning(false);
       setGenStatus("error", `Error: ${msg.error}`);
@@ -3499,11 +3896,14 @@ function createChatPanel() {
 
     const _fpp = _activeProvPayload();
     _activeSyncClient.ws.send(JSON.stringify({
-      type:       "chat_message",
-      message_id: msgId,
-      messages:   _chatHistory,
-      api_key:    _fpp.api_key  || undefined,
-      api_base:   _fpp.api_base || undefined,
+      type:          "chat_message",
+      message_id:    msgId,
+      messages:      _chatHistory,
+      api_key:       _fpp.api_key  || undefined,
+      api_base:      _fpp.api_base || undefined,
+      agent_backend: _backendPickerRef?.value()
+                       || localStorage.getItem("comfyclaw_agent_backend")
+                       || "litellm",
     }));
   };
 

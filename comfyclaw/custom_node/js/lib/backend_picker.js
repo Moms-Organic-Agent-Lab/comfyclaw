@@ -8,7 +8,23 @@
  *
  * Availability is fed in from the server via the ``agent_backends`` WS
  * message (see ``SyncServer._dispatch`` -> ``list_agent_backends``).
- * Unavailable backends render disabled with a tooltip.
+ *
+ * The status map per backend is now an object::
+ *
+ *   {
+ *     state: "ok" | "needs_install" | "needs_auth" | "unsupported" | "error",
+ *     binary_path: string,
+ *     auth_method: string,
+ *     detail: string,
+ *     can_install: boolean,
+ *   }
+ *
+ * Booleans are still accepted for backward compatibility.
+ *
+ * Backends in ``needs_install`` / ``needs_auth`` states are visually
+ * distinct (red / amber dot) and clickable: the click fires
+ * ``onAction(id, action)`` where ``action`` is ``"install"`` or
+ * ``"signin"`` — the caller is expected to open the matching modal.
  */
 
 import { escHtml } from "./util.js";
@@ -24,29 +40,56 @@ function _readSaved() {
   return localStorage.getItem("comfyclaw_agent_backend") || "litellm";
 }
 
-export function createBackendPicker({ onChange } = {}) {
+function _normalizeStatus(raw) {
+  // Boolean form (legacy): true -> ok, false -> unsupported.
+  if (raw === true)  return { state: "ok",          detail: "", binary_path: "", auth_method: "", can_install: false };
+  if (raw === false) return { state: "unsupported", detail: "", binary_path: "", auth_method: "", can_install: false };
+  if (!raw || typeof raw !== "object") return null;
+  return {
+    state: raw.state || (raw.available ? "ok" : "unsupported"),
+    detail: raw.detail || "",
+    binary_path: raw.binary_path || "",
+    auth_method: raw.auth_method || "",
+    can_install: !!raw.can_install,
+  };
+}
+
+export function createBackendPicker({ onChange, onAction } = {}) {
   const root = document.createElement("div");
   root.style.cssText = `
     display: flex; gap: 5px; margin: 4px 0 8px; flex-wrap: wrap;
   `;
   let active = _readSaved();
-  let availability = { litellm: true };
+  /** @type {Record<string, {state: string, detail: string, binary_path: string, auth_method: string, can_install: boolean}>} */
+  let statuses = { litellm: { state: "ok", detail: "", binary_path: "", auth_method: "", can_install: false } };
+
+  function _isUsable(id) {
+    const st = statuses[id];
+    if (!st) return true;            // unknown = optimistically allow
+    return st.state === "ok";
+  }
 
   function _paint() {
     for (const btn of root.querySelectorAll("button[data-backend]")) {
       const id = btn.dataset.backend;
-      const avail = availability[id];
+      const st = statuses[id];
+      const state = st?.state;
       const isActive = id === active;
       btn.classList.toggle("cc-chip-active", isActive);
-      btn.style.opacity = avail === false ? "0.45" : "1";
-      btn.disabled = avail === false;
+      btn.style.opacity = state === "unsupported" ? "0.45" : "1";
+      btn.disabled = state === "unsupported";
+
+      const meta = BACKENDS.find((b) => b.id === id);
+      btn.title = st?.detail ? `${meta?.label || id}: ${st.detail}` : meta?.desc || "";
 
       const dot = btn.querySelector(".cc-be-dot");
       if (dot) {
-        dot.style.background =
-          avail === false ? "var(--cc-accent-red)"
-          : avail === true ? "var(--cc-accent-green)"
-          : "var(--cc-fg-faint)";
+        let color = "var(--cc-fg-faint)";
+        if (state === "ok") color = "var(--cc-accent-green)";
+        else if (state === "needs_auth") color = "var(--cc-accent, #f0a500)";
+        else if (state === "needs_install" || state === "error") color = "var(--cc-accent-red)";
+        else if (state === "unsupported") color = "var(--cc-fg-faint)";
+        dot.style.background = color;
       }
     }
   }
@@ -54,7 +97,7 @@ export function createBackendPicker({ onChange } = {}) {
   function set(id, fire = true) {
     if (!BACKENDS.find((b) => b.id === id)) return;
     if (active === id) return;
-    if (availability[id] === false) return;
+    if (!_isUsable(id)) return;
     active = id;
     localStorage.setItem("comfyclaw_agent_backend", id);
     _paint();
@@ -80,15 +123,30 @@ export function createBackendPicker({ onChange } = {}) {
     root,
     value: () => active,
     set,
-    /** Update the UI with the latest availability map from the server. */
+    /** Return the raw status object for a backend (state/detail/...). */
+    status: (id) => statuses[id] || null,
+    /** Return the active backend's status object. */
+    activeStatus: () => statuses[active] || null,
+    /** Update the UI with the latest availability map from the server.
+     *
+     *  Accepts either the new object-valued map or the legacy boolean map.
+     */
     setAvailability(map) {
-      availability = { ...availability, ...map };
-      // If the currently-selected backend is now unavailable, fall back.
-      if (availability[active] === false) {
+      for (const [name, raw] of Object.entries(map || {})) {
+        const norm = _normalizeStatus(raw);
+        if (norm) statuses[name] = norm;
+      }
+      // If the currently-selected backend is no longer ok, demote to litellm.
+      if (!_isUsable(active)) {
         active = "litellm";
         localStorage.setItem("comfyclaw_agent_backend", active);
       }
       _paint();
+    },
+    /** Programmatically request an action ("install" | "signin") for an id.
+     *  Wired to the popover's action buttons. */
+    triggerAction(id, action) {
+      if (typeof onAction === "function") onAction(id, action);
     },
   };
 }

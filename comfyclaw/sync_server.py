@@ -41,11 +41,26 @@ Message types (client → server):
   cancel_generation
   human_feedback
   user_refinement
-  chat_message
+  chat_message            — free-form chat (accepts agent_backend to pick
+                            litellm vs claude-code)
   debug_workflow
   save_checkpoint
   restore_checkpoint
   list_checkpoints
+  list_agent_backends
+  backend_install_start    — kick off CLI installer (claude only for now)
+  backend_install_cancel
+  backend_auth_start       — drive `claude auth login` paste-back OAuth
+  backend_auth_paste_code  — forward the redirect URL into claude's stdin
+  backend_auth_cancel
+
+Additional message types (server → client):
+  agent_backends           — backend availability (with state per backend)
+  backend_install_progress
+  backend_install_complete
+  backend_auth_url         — server-captured "Open in browser:" URL
+  backend_auth_progress
+  backend_auth_complete
 """
 
 from __future__ import annotations
@@ -54,6 +69,7 @@ import asyncio
 import copy
 import json
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -200,6 +216,11 @@ class SyncServer:
         # ``sync.cancel_requested``; it now delegates to the active connection.
         self._active_ws: Any = None  # set when trigger arrives
         self._active_ws_lock = threading.Lock()
+
+        # In-flight backend setup flows (install/OAuth), one per ws.
+        from .setup_flows import SetupFlowRegistry
+
+        self._setup_flows = SetupFlowRegistry()
 
     # ── convenience: active connection's cancel flag ────────────────────────
 
@@ -613,6 +634,211 @@ class SyncServer:
         except Exception as exc:  # noqa: BLE001
             await self._send_skill_error(ws, f"Git import failed: {exc}")
 
+    # ── Backend setup flows (install + OAuth) ────────────────────────────────
+
+    async def _send_agent_backends(self, ws: Any) -> None:
+        """Emit one ``agent_backends`` snapshot to a single connection."""
+        from .agent_backends import probe_all
+
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "agent_backends",
+                    "backends": [
+                        {
+                            "name": s.name,
+                            "available": s.available,
+                            "state": s.state,
+                            "binary_path": s.binary_path,
+                            "auth_method": s.auth_method,
+                            "detail": s.detail,
+                            "can_install": s.can_install,
+                        }
+                        for s in probe_all()
+                    ],
+                }
+            )
+        )
+
+    def _broadcast_agent_backends(self, ws: Any) -> None:
+        """Thread-safe re-probe + push, used from background flow callbacks."""
+        if not self._loop:
+            return
+        asyncio.run_coroutine_threadsafe(self._send_agent_backends(ws), self._loop)
+
+    async def _handle_backend_install_start(self, ws: Any, msg: dict) -> None:
+        from .setup_flows import ClaudeInstallFlow
+
+        backend = msg.get("backend", "claude-code")
+        if backend != "claude-code":
+            self._send_json_to(
+                ws,
+                {
+                    "type": "backend_install_complete",
+                    "backend": backend,
+                    "success": False,
+                    "error": f"No installer wired up for {backend!r} yet.",
+                },
+            )
+            return
+
+        existing = self._setup_flows.get(ws)
+        if existing and existing.is_running:
+            self._send_json_to(
+                ws,
+                {
+                    "type": "backend_install_complete",
+                    "backend": backend,
+                    "success": False,
+                    "error": "Another setup flow is already running for this connection.",
+                },
+            )
+            return
+
+        def on_line(level: str, text: str) -> None:
+            self._send_json_to(
+                ws,
+                {
+                    "type": "backend_install_progress",
+                    "backend": backend,
+                    "level": level,
+                    "line": text,
+                },
+            )
+
+        def on_complete(success: bool, detail: str) -> None:
+            self._send_json_to(
+                ws,
+                {
+                    "type": "backend_install_complete",
+                    "backend": backend,
+                    "success": success,
+                    "error": "" if success else detail,
+                    "detail": detail,
+                },
+            )
+            self._setup_flows.pop(ws)
+            self._broadcast_agent_backends(ws)
+
+        flow = ClaudeInstallFlow(on_line=on_line, on_complete=on_complete)
+        prev = self._setup_flows.set(ws, flow)
+        if prev:
+            try:
+                prev.cancel()
+            except Exception:  # noqa: BLE001
+                pass
+        self._send_json_to(
+            ws,
+            {
+                "type": "backend_install_progress",
+                "backend": backend,
+                "level": "info",
+                "line": f"Starting install: {flow.command}",
+            },
+        )
+        flow.start()
+
+    async def _handle_backend_auth_start(self, ws: Any, msg: dict) -> None:
+        from .setup_flows import ClaudeAuthFlow
+
+        backend = msg.get("backend", "claude-code")
+        if backend != "claude-code":
+            self._send_json_to(
+                ws,
+                {
+                    "type": "backend_auth_complete",
+                    "backend": backend,
+                    "success": False,
+                    "error": f"No auth flow wired up for {backend!r} yet.",
+                },
+            )
+            return
+
+        existing = self._setup_flows.get(ws)
+        if existing and existing.is_running:
+            self._send_json_to(
+                ws,
+                {
+                    "type": "backend_auth_complete",
+                    "backend": backend,
+                    "success": False,
+                    "error": "Another setup flow is already running for this connection.",
+                },
+            )
+            return
+
+        def on_url(url: str) -> None:
+            self._send_json_to(
+                ws,
+                {"type": "backend_auth_url", "backend": backend, "url": url},
+            )
+
+        def on_progress(level: str, text: str) -> None:
+            self._send_json_to(
+                ws,
+                {
+                    "type": "backend_auth_progress",
+                    "backend": backend,
+                    "level": level,
+                    "message": text,
+                },
+            )
+
+        def on_complete(success: bool, detail: str) -> None:
+            self._send_json_to(
+                ws,
+                {
+                    "type": "backend_auth_complete",
+                    "backend": backend,
+                    "success": success,
+                    "error": "" if success else detail,
+                    "detail": detail,
+                },
+            )
+            self._setup_flows.pop(ws)
+            self._broadcast_agent_backends(ws)
+
+        flow = ClaudeAuthFlow(
+            on_url=on_url, on_progress=on_progress, on_complete=on_complete
+        )
+        prev = self._setup_flows.set(ws, flow)
+        if prev:
+            try:
+                prev.cancel()
+            except Exception:  # noqa: BLE001
+                pass
+
+        auth_method = (msg.get("auth_method") or "claudeai").strip() or "claudeai"
+        flow.start(auth_method=auth_method)
+
+    def _handle_backend_auth_paste(self, ws: Any, msg: dict) -> None:
+        from .setup_flows import ClaudeAuthFlow
+
+        backend = msg.get("backend", "claude-code")
+        flow = self._setup_flows.get(ws)
+        if not isinstance(flow, ClaudeAuthFlow):
+            self._send_json_to(
+                ws,
+                {
+                    "type": "backend_auth_progress",
+                    "backend": backend,
+                    "level": "error",
+                    "message": "No sign-in flow is running. Click Sign in again.",
+                },
+            )
+            return
+        ok, message = flow.submit_redirect_url(msg.get("url", ""))
+        if not ok:
+            self._send_json_to(
+                ws,
+                {
+                    "type": "backend_auth_progress",
+                    "backend": backend,
+                    "level": "error",
+                    "message": message,
+                },
+            )
+
     async def _handle_chat_message(self, websocket: Any, msg: dict) -> None:
         from .chat_agent import chat_stream
 
@@ -625,9 +851,21 @@ class SyncServer:
         model: str = (msg.get("model") or "").strip() or self._model
         api_key: str | None = (msg.get("api_key") or "").strip() or self._api_key
         api_base: str | None = (msg.get("api_base") or "").strip() or None
+        agent_backend: str = (
+            (msg.get("agent_backend") or "").strip().lower()
+            or os.environ.get("COMFYCLAW_AGENT_BACKEND", "").strip().lower()
+            or "litellm"
+        )
 
         try:
-            async for token in chat_stream(messages, workflow, model, api_key, api_base):
+            async for token in chat_stream(
+                messages,
+                workflow,
+                model,
+                api_key,
+                api_base,
+                agent_backend=agent_backend,
+            ):
                 await websocket.send(
                     json.dumps(
                         {
@@ -824,6 +1062,12 @@ class SyncServer:
             with self._active_ws_lock:
                 if self._active_ws is websocket:
                     self._active_ws = None
+            # Reap any in-flight backend setup flow so we don't orphan a
+            # subprocess waiting on stdin from a panel that's no longer there.
+            try:
+                self._setup_flows.cancel_for(websocket)
+            except Exception:  # noqa: BLE001
+                pass
             log.debug("[SyncServer] Client disconnected (%d remaining)", len(self._conns))
 
     async def _dispatch(self, ws: Any, conn: _ConnState, msg: dict) -> None:
@@ -987,21 +1231,38 @@ class SyncServer:
 
         # ── Agent backend availability probe ─────────────────────────────────
         elif t == "list_agent_backends":
-            from .agent_backends import probe_all
+            await self._send_agent_backends(ws)
 
-            await ws.send(
-                json.dumps(
-                    {
-                        "type": "agent_backends",
-                        "backends": [
-                            {
-                                "name": s.name,
-                                "available": s.available,
-                                "binary_path": s.binary_path,
-                                "detail": s.detail,
-                            }
-                            for s in probe_all()
-                        ],
-                    }
-                )
+        # ── Backend setup flows (install + OAuth) ────────────────────────────
+        elif t == "backend_install_start":
+            await self._handle_backend_install_start(ws, msg)
+
+        elif t == "backend_install_cancel":
+            self._setup_flows.cancel_for(ws)
+            self._send_json_to(
+                ws,
+                {
+                    "type": "backend_install_complete",
+                    "backend": msg.get("backend", "claude-code"),
+                    "success": False,
+                    "error": "cancelled",
+                },
+            )
+
+        elif t == "backend_auth_start":
+            await self._handle_backend_auth_start(ws, msg)
+
+        elif t == "backend_auth_paste_code":
+            self._handle_backend_auth_paste(ws, msg)
+
+        elif t == "backend_auth_cancel":
+            self._setup_flows.cancel_for(ws)
+            self._send_json_to(
+                ws,
+                {
+                    "type": "backend_auth_complete",
+                    "backend": msg.get("backend", "claude-code"),
+                    "success": False,
+                    "error": "cancelled",
+                },
             )
