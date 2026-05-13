@@ -88,11 +88,7 @@ class _BaseFlow:
     @property
     def is_running(self) -> bool:
         with self._lock:
-            return bool(
-                self._proc
-                and self._proc.poll() is None
-                and not self._stopped.is_set()
-            )
+            return bool(self._proc and self._proc.poll() is None and not self._stopped.is_set())
 
     def cancel(self) -> None:
         """Best-effort terminate: SIGTERM, 2s grace, then SIGKILL."""
@@ -164,9 +160,7 @@ class ClaudeInstallFlow(_BaseFlow):
 
         self._started_at = time.time()
         self._on_line("info", f"$ {_CLAUDE_INSTALL_CMD}")
-        self._reader = threading.Thread(
-            target=self._pump, daemon=True, name="claude-install-pump"
-        )
+        self._reader = threading.Thread(target=self._pump, daemon=True, name="claude-install-pump")
         self._reader.start()
 
     def _pump(self) -> None:
@@ -282,9 +276,7 @@ class ClaudeAuthFlow(_BaseFlow):
 
         self._started_at = time.time()
         self._on_progress("info", "Launching Claude sign-in…")
-        self._reader = threading.Thread(
-            target=self._pump, daemon=True, name="claude-auth-pump"
-        )
+        self._reader = threading.Thread(target=self._pump, daemon=True, name="claude-auth-pump")
         self._reader.start()
 
     def _pump(self) -> None:
@@ -345,7 +337,10 @@ class ClaudeAuthFlow(_BaseFlow):
         if not url.lower().startswith(("http://", "https://")):
             return False, "URL must start with http:// or https://"
         if "code=" not in url:
-            return False, "That URL doesn't contain a `code` parameter. Did you copy the full address?"
+            return (
+                False,
+                "That URL doesn't contain a `code` parameter. Did you copy the full address?",
+            )
 
         proc = self._proc
         if proc is None or proc.poll() is not None or proc.stdin is None:

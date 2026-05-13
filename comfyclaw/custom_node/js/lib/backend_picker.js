@@ -28,6 +28,7 @@
  */
 
 import { escHtml } from "./util.js";
+import { showToast } from "./toast.js";
 
 const BACKENDS = [
   { id: "litellm",     label: "LiteLLM",      desc: "Direct API (Anthropic, OpenAI, Gemini, Groq, Ollama, …)" },
@@ -97,7 +98,37 @@ export function createBackendPicker({ onChange, onAction } = {}) {
   function set(id, fire = true) {
     if (!BACKENDS.find((b) => b.id === id)) return;
     if (active === id) return;
-    if (!_isUsable(id)) return;
+    if (!_isUsable(id)) {
+      // Explain *why* the chip is rejecting the click instead of silently
+      // swallowing it. The previous silent-return was the single most common
+      // source of "clicked Claude Code, nothing happens" confusion.
+      const st = statuses[id];
+      const meta = BACKENDS.find((b) => b.id === id);
+      const label = meta?.label || id;
+      let msg, kind = "warning";
+      switch (st?.state) {
+        case "needs_install":
+          msg = `${label} CLI not installed. ` +
+                (st.detail || "Install it, then click the chip again.");
+          break;
+        case "needs_auth":
+          msg = `${label} is installed but not signed in. ` +
+                (st.detail || "Run `claude /login` (or the matching command) in a terminal.");
+          break;
+        case "unsupported":
+          msg = `${label} isn't available in this environment. ` +
+                (st.detail || `Make sure the \`${id}\` binary is on $PATH.`);
+          break;
+        case "error":
+          msg = `${label} probe returned an error: ${st.detail || "unknown"}.`;
+          kind = "error";
+          break;
+        default:
+          msg = `${label} isn't usable right now.`;
+      }
+      showToast(msg, kind, 6000);
+      return;
+    }
     active = id;
     localStorage.setItem("comfyclaw_agent_backend", id);
     _paint();

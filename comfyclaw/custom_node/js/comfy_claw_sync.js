@@ -2306,7 +2306,25 @@ function createComfyClawPanel() {
       }
       return;
     }
-    if (_activeSyncClient?.ws?.readyState !== WebSocket.OPEN) return;
+    if (_activeSyncClient?.ws?.readyState !== WebSocket.OPEN) {
+      // Loud-fail rather than silently swallowing the click — the most common
+      // reason Generate appears to "do nothing" is that `comfyclaw serve`
+      // isn't running and the WS is in CLOSED / CONNECTING state.
+      const rs = _activeSyncClient?.ws?.readyState;
+      const stateName = ({
+        [WebSocket.CONNECTING]: "still connecting",
+        [WebSocket.CLOSING]:    "closing",
+        [WebSocket.CLOSED]:     "disconnected",
+      })[rs] || "not connected";
+      showToast(
+        `ComfyClaw server is ${stateName}. ` +
+        `Start it with \`comfyclaw serve\` in a terminal, then retry.`,
+        "warning",
+        6000,
+      );
+      setGenStatus("idle", "Backend not connected — start `comfyclaw serve`.");
+      return;
+    }
     let workflow = selectedMode === "improve" ? await exportCurrentWorkflow() : null;
     const cpWf = workflow || await exportCurrentWorkflow();
     if (cpWf && Object.keys(cpWf).length > 0)

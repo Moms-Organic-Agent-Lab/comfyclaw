@@ -232,9 +232,7 @@ def _env_with_claude_path(binary: str) -> dict[str, str]:
     if binary_dir:
         existing = env.get("PATH", "")
         if binary_dir not in existing.split(os.pathsep):
-            env["PATH"] = (
-                binary_dir + (os.pathsep + existing if existing else "")
-            )
+            env["PATH"] = binary_dir + (os.pathsep + existing if existing else "")
     return env
 
 
@@ -290,7 +288,9 @@ def _probe_claude_auth(binary: str) -> tuple[BackendState, str, str]:
     logged_in = bool(payload.get("loggedIn"))
     auth_method = str(payload.get("authMethod") or "")
     if logged_in:
-        detail = f"Signed in via {auth_method}" if auth_method and auth_method != "none" else "Signed in"
+        detail = (
+            f"Signed in via {auth_method}" if auth_method and auth_method != "none" else "Signed in"
+        )
         return "ok", auth_method, detail
     return "needs_auth", auth_method, "Not signed in"
 

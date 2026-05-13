@@ -23,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from collections.abc import AsyncGenerator
 
 log = logging.getLogger(__name__)
@@ -85,7 +84,9 @@ def _flatten_history(messages: list[dict]) -> tuple[str, str]:
     for m in prior:
         role = m.get("role", "user")
         content = str(m.get("content") or "")
-        label = {"user": "User", "assistant": "Assistant", "system": "System"}.get(role, role.title())
+        label = {"user": "User", "assistant": "Assistant", "system": "System"}.get(
+            role, role.title()
+        )
         transcript_lines.append(f"{label}: {content}")
     return "\n".join(transcript_lines), latest
 

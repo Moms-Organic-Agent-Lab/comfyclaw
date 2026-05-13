@@ -798,9 +798,7 @@ class SyncServer:
             self._setup_flows.pop(ws)
             self._broadcast_agent_backends(ws)
 
-        flow = ClaudeAuthFlow(
-            on_url=on_url, on_progress=on_progress, on_complete=on_complete
-        )
+        flow = ClaudeAuthFlow(on_url=on_url, on_progress=on_progress, on_complete=on_complete)
         prev = self._setup_flows.set(ws, flow)
         if prev:
             try:
