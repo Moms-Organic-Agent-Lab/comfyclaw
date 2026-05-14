@@ -48,6 +48,8 @@ Message types (client → server):
   restore_checkpoint
   list_checkpoints
   list_agent_backends
+  list_provider_keys       — ask which LiteLLM provider env-vars are set
+                              (panel filters its provider bar accordingly)
   backend_install_start    — kick off CLI installer
                               (claude-code / codex / gemini-cli)
   backend_install_cancel
@@ -641,6 +643,52 @@ class SyncServer:
 
     # ── Backend setup flows (install + OAuth) ────────────────────────────────
 
+    # ── Provider API-key probe ──────────────────────────────────────────────────
+    # The panel filters its LiteLLM provider bar by which keys are actually
+    # present on this server.  We *never* leak the values — just booleans —
+    # because the panel only needs "is this provider usable?" semantics.
+    #
+    # Wildcard providers (OpenRouter / Azure) can route to any underlying
+    # model, so if one of them is configured we tell the panel to leave all
+    # provider tabs unlocked.
+    _PROVIDER_ENV: dict[str, tuple[str, ...]] = {
+        "anthropic":  ("ANTHROPIC_API_KEY",),
+        "openai":     ("OPENAI_API_KEY",),
+        "google":     ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+        # Ollama is local — no key needed.  Marker stays empty so the panel
+        # always shows it (we don't probe the daemon here).
+        "ollama":     (),
+    }
+    _WILDCARD_ENV: dict[str, tuple[str, ...]] = {
+        "openrouter": ("OPENROUTER_API_KEY",),
+        "azure":      ("AZURE_API_KEY",),
+    }
+
+    async def _send_provider_keys(self, ws: Any) -> None:
+        """Emit a ``provider_keys`` snapshot to a single connection."""
+        per_provider: dict[str, bool] = {}
+        for prov, env_vars in self._PROVIDER_ENV.items():
+            per_provider[prov] = (
+                True
+                if not env_vars  # always-available providers (ollama)
+                else any(os.environ.get(v) for v in env_vars)
+            )
+
+        wildcards: list[str] = []
+        for name, env_vars in self._WILDCARD_ENV.items():
+            if any(os.environ.get(v) for v in env_vars):
+                wildcards.append(name)
+
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "provider_keys",
+                    "providers": per_provider,
+                    "wildcards": wildcards,
+                }
+            )
+        )
+
     async def _send_agent_backends(self, ws: Any) -> None:
         """Emit one ``agent_backends`` snapshot to a single connection."""
         from .agent_backends import probe_all
@@ -744,9 +792,69 @@ class SyncServer:
         flow.start()
 
     async def _handle_backend_auth_start(self, ws: Any, msg: dict) -> None:
-        from .setup_flows import ClaudeAuthFlow, CodexAuthFlow
+        from .setup_flows import ClaudeAuthFlow, CodexAuthFlow, GeminiLogoutFlow
 
         backend = msg.get("backend", "claude-code")
+        force = bool(msg.get("force", False))
+
+        # Gemini CLI has no non-TUI auth subcommand — we can only do the
+        # logout half (delete cached creds) and ask the user to run `gemini`
+        # in a terminal to finish a fresh sign-in.  Only the "force" path
+        # (Re-login button) is meaningful for Gemini; a plain "Sign in" with
+        # no force flag just tells the user what to do.
+        if backend == "gemini-cli":
+            if not force:
+                self._send_json_to(
+                    ws,
+                    {
+                        "type": "backend_auth_complete",
+                        "backend": backend,
+                        "success": False,
+                        "error": (
+                            "Gemini CLI sign-in is interactive. Run `gemini` once "
+                            "in a terminal to complete Google OAuth."
+                        ),
+                    },
+                )
+                return
+
+            def gemini_on_progress(level: str, text: str) -> None:
+                self._send_json_to(
+                    ws,
+                    {
+                        "type": "backend_auth_progress",
+                        "backend": backend,
+                        "level": level,
+                        "message": text,
+                    },
+                )
+
+            def gemini_on_complete(success: bool, detail: str) -> None:
+                self._send_json_to(
+                    ws,
+                    {
+                        "type": "backend_auth_complete",
+                        "backend": backend,
+                        "success": success,
+                        "error": "" if success else detail,
+                        "detail": detail,
+                    },
+                )
+                self._setup_flows.pop(ws)
+                self._broadcast_agent_backends(ws)
+
+            flow = GeminiLogoutFlow(
+                on_progress=gemini_on_progress, on_complete=gemini_on_complete
+            )
+            prev = self._setup_flows.set(ws, flow)
+            if prev:
+                try:
+                    prev.cancel()
+                except Exception:  # noqa: BLE001
+                    pass
+            flow.start()
+            return
+
         if backend not in ("claude-code", "codex"):
             self._send_json_to(
                 ws,
@@ -818,8 +926,6 @@ class SyncServer:
                 prev.cancel()
             except Exception:  # noqa: BLE001
                 pass
-
-        force = bool(msg.get("force", False))
 
         if isinstance(flow, ClaudeAuthFlow):
             auth_method = (msg.get("auth_method") or "claudeai").strip() or "claudeai"
@@ -1266,6 +1372,10 @@ class SyncServer:
         # ── Agent backend availability probe ─────────────────────────────────
         elif t == "list_agent_backends":
             await self._send_agent_backends(ws)
+
+        # ── Provider API-key probe (LiteLLM filtering) ───────────────────────
+        elif t == "list_provider_keys":
+            await self._send_provider_keys(ws)
 
         # ── Backend setup flows (install + OAuth) ────────────────────────────
         elif t == "backend_install_start":

@@ -27,6 +27,12 @@ All auth flows accept a ``force=True`` flag at start time that first runs
 the backend's ``<binary> logout`` so the user can switch accounts without
 having to drop to a terminal.
 
+* :class:`GeminiLogoutFlow` — Gemini CLI has no non-TUI auth subcommand,
+  so we can't drive a full re-login from here.  This flow does the logout
+  half (deletes ``~/.gemini/oauth_creds.json`` plus the active-account
+  pointer) and tells the user to run ``gemini`` once in a terminal to
+  complete the new sign-in.
+
 Both flows are thread-based (the WebSocket server runs on asyncio in a
 background thread; flows run their own background reader threads and
 push events back via thread-safe callbacks).  Cancellation is
@@ -699,6 +705,81 @@ class CodexAuthFlow(_BaseFlow):
             )
         else:
             self._on_complete(False, f"Sign-in did not complete: {tail[-300:]}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Gemini logout flow (delete cached OAuth creds)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# Files Gemini CLI writes its Google OAuth session into.  We blow these away on
+# logout; the user then runs ``gemini`` once in a terminal to launch a fresh
+# OAuth dance.  We *don't* touch ``GEMINI.md`` / ``installation_id`` / history.
+_GEMINI_CRED_FILES: tuple[str, ...] = (
+    "oauth_creds.json",
+    "google_accounts.json",
+)
+
+
+class GeminiLogoutFlow(_BaseFlow):
+    """Synchronous "logout" for Gemini CLI — there is no real `gemini auth`,
+    so we just delete the OAuth cache files.
+
+    Despite inheriting from :class:`_BaseFlow` (for the registry plumbing),
+    this flow doesn't spawn a subprocess — :meth:`start` completes in-line and
+    fires ``on_complete`` immediately.
+    """
+
+    name = "gemini-logout"
+
+    def __init__(
+        self,
+        on_progress: Callable[[str, str], None],
+        on_complete: Callable[[bool, str], None],
+    ) -> None:
+        super().__init__()
+        self._on_progress = on_progress
+        self._on_complete = on_complete
+
+    def start(self) -> None:
+        gemini_dir = os.path.join(os.path.expanduser("~"), ".gemini")
+        if not os.path.isdir(gemini_dir):
+            self._on_complete(
+                True,
+                "No Gemini credentials cached. Run `gemini` to sign in.",
+            )
+            return
+
+        removed: list[str] = []
+        kept: list[str] = []
+        errors: list[str] = []
+        for fname in _GEMINI_CRED_FILES:
+            path = os.path.join(gemini_dir, fname)
+            if not os.path.exists(path):
+                continue
+            try:
+                os.remove(path)
+                removed.append(fname)
+                self._on_progress("info", f"Removed ~/.gemini/{fname}")
+            except OSError as exc:
+                kept.append(fname)
+                errors.append(f"{fname}: {exc}")
+                self._on_progress("error", f"Could not remove ~/.gemini/{fname}: {exc}")
+
+        if errors:
+            self._on_complete(
+                False,
+                "Logged out partially. Could not remove: " + "; ".join(errors),
+            )
+            return
+
+        detail = (
+            f"Removed {', '.join(removed)}. "
+            "Run `gemini` in a terminal to sign in with a different account."
+            if removed
+            else "No Gemini credentials cached. Run `gemini` to sign in."
+        )
+        self._on_complete(True, detail)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

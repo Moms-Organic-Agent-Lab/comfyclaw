@@ -609,14 +609,6 @@ const PROVIDERS = {
       { value: "gemini/gemini-2.0-flash", label: "Gemini 2.0 Flash" },
     ],
   },
-  groq: {
-    label: "Groq", emoji: "⚡", color: "#f97316",
-    models: [
-      { value: "groq/llama-3.3-70b-versatile",       label: "Llama 3.3 70B"    },
-      { value: "groq/deepseek-r1-distill-llama-70b",  label: "DeepSeek R1 70B"  },
-      { value: "groq/mixtral-8x7b-32768",             label: "Mixtral 8×7B"     },
-    ],
-  },
   ollama: {
     label: "Ollama", emoji: "▲", color: "#a6e3a1",
     models: [
@@ -624,6 +616,13 @@ const PROVIDERS = {
       { value: "ollama/qwen2.5:14b", label: "Qwen 2.5 14B" },
       { value: "ollama/mistral:7b",  label: "Mistral 7B"   },
     ],
+  },
+  // "Custom" tab — only shown when the user has added at least one custom
+  // model under it.  Holds anything that doesn't fit the built-in tabs
+  // (e.g. ``openrouter/minimax/abab6`` going through an OpenRouter key).
+  custom: {
+    label: "Custom", emoji: "✨", color: "#cba6f7",
+    models: [],
   },
 };
 
@@ -1105,6 +1104,66 @@ let _providerSettings = (() => {
   catch(_) { return {}; }
 })();
 
+// Server-reported availability of each provider's env-var (filled by the
+// `provider_keys` WS message dispatched right after `hello`).
+//
+//   _serverProvKeys.providers : {anthropic: bool, openai: bool, …}
+//   _serverProvKeys.wildcards : ["openrouter", "azure", …] (any of these
+//                                being set unlocks all providers)
+let _serverProvKeys = { providers: {}, wildcards: [] };
+
+// ── User-defined custom models ──────────────────────────────────────────────
+// Stored as a flat list — each entry pins a LiteLLM model id plus the tab
+// it should appear under so the user can mix Anthropic's just-released model
+// with a MiniMax-via-OpenRouter route without us having to predict either.
+//
+//   [
+//     { id: "anthropic/claude-opus-4-7", label: "Opus 4.7",    tab: "anthropic" },
+//     { id: "openrouter/minimax/abab6",  label: "MiniMax abab6", tab: "custom" },
+//   ]
+const _CUSTOM_MODELS_KEY = "comfyclaw_custom_models";
+let _customModels = (() => {
+  try { return JSON.parse(localStorage.getItem(_CUSTOM_MODELS_KEY)) || []; }
+  catch (_) { return []; }
+})();
+
+function _saveCustomModels() {
+  localStorage.setItem(_CUSTOM_MODELS_KEY, JSON.stringify(_customModels));
+}
+
+/** Add (or update) a custom model entry; dedups by ``id``. */
+function _addCustomModel(id, label, tab = "custom") {
+  id = (id || "").trim();
+  if (!id) return false;
+  label = (label || id).trim();
+  if (!PROVIDERS[tab]) tab = "custom";
+  _customModels = _customModels.filter((m) => m.id !== id);
+  _customModels.push({ id, label, tab });
+  _saveCustomModels();
+  return true;
+}
+
+function _removeCustomModel(id) {
+  const before = _customModels.length;
+  _customModels = _customModels.filter((m) => m.id !== id);
+  if (_customModels.length !== before) _saveCustomModels();
+}
+
+/** Built-in + user-defined models for a given provider tab. */
+function _modelsForProvider(tabKey) {
+  const builtins = PROVIDERS[tabKey]?.models || [];
+  const customs = _customModels
+    .filter((m) => (m.tab || "custom") === tabKey)
+    .map((m) => ({ value: m.id, label: m.label, custom: true }));
+  return [...builtins, ...customs];
+}
+
+/** True when the user has at least one custom model assigned to the
+ *  ``custom`` tab.  We use this to hide the empty tab. */
+function _hasCustomTabModels() {
+  return _customModels.some((m) => (m.tab || "custom") === "custom");
+}
+
 function _saveProv() { localStorage.setItem(_PROV_SETTINGS_KEY, JSON.stringify(_providerSettings)); }
 function _getPS(pKey, field) { return _providerSettings[pKey]?.[field] || ""; }
 function _setPS(pKey, field, val) {
@@ -1112,6 +1171,24 @@ function _setPS(pKey, field, val) {
   _providerSettings[pKey][field] = val;
   _saveProv();
   _refreshProvDots();
+}
+
+/** Is a LiteLLM provider usable right now?
+ *  True when ANY of:
+ *    - User set its API key in Settings → Providers (localStorage)
+ *    - Server has the matching env var set
+ *    - The provider needs no key (Ollama, local)
+ *    - A wildcard provider (OpenRouter / Azure) is configured anywhere
+ *  The "custom" tab is special — the user pinned its model strings so we
+ *  trust them to have the matching credentials set up somewhere. */
+function _isProviderUsable(key) {
+  if (!key) return false;
+  if (key === "ollama") return true;
+  if (key === "custom") return _hasCustomTabModels();
+  if (_getPS(key, "apiKey")) return true;
+  if (_serverProvKeys.providers?.[key]) return true;
+  if ((_serverProvKeys.wildcards || []).length > 0) return true;
+  return false;
 }
 
 /** Return {apiKey, baseUrl} to include in any outgoing WS message. */
@@ -1126,13 +1203,58 @@ function _activeProvPayload() {
 
 function _refreshProvDots() {
   document.querySelectorAll(".cc-provider-btn").forEach(btn => {
-    const hasKey = !!_getPS(btn.dataset.key, "apiKey");
+    const key = btn.dataset.key;
+
+    // The Custom tab is hidden when it has no user-added models; otherwise
+    // the bar shows a tab with nothing in its dropdown.
+    if (key === "custom" && !_hasCustomTabModels()) {
+      btn.style.display = "none";
+      return;
+    }
+    btn.style.display = "";
+
+    const usable = _isProviderUsable(key);
+    const clientKey = !!_getPS(key, "apiKey");
+    const serverKey = !!_serverProvKeys.providers?.[key];
+    const viaWildcard =
+      !clientKey && !serverKey && (_serverProvKeys.wildcards || []).length > 0;
+
+    // Disable + dim non-usable buttons.  The user can still click them — we
+    // intercept the click in _setActiveProvider and bounce them to
+    // Settings → Providers — but the visual cue makes "no key" obvious.
+    btn.disabled = !usable;
+    btn.style.opacity = usable ? "1" : "0.45";
+    btn.style.cursor  = usable ? "pointer" : "not-allowed";
+
+    // Tooltip that explains *why* a button is on/off.  Helpful for
+    // debugging "I added my key, why isn't it green yet?" confusion.
+    if (!usable) {
+      btn.title = `${PROVIDERS[key]?.label || key}: no API key — add one in Settings → Providers`;
+    } else if (clientKey) {
+      btn.title = `${PROVIDERS[key]?.label || key}: key configured in panel`;
+    } else if (serverKey) {
+      btn.title = `${PROVIDERS[key]?.label || key}: key found in server environment`;
+    } else if (viaWildcard) {
+      const wc = (_serverProvKeys.wildcards || []).join(" / ");
+      btn.title = `${PROVIDERS[key]?.label || key}: routed via ${wc} (wildcard)`;
+    } else if (key === "ollama") {
+      btn.title = "Ollama: local provider — no key required";
+    }
+
+    // Status dot.  Green = direct key (client or server), blue = via
+    // wildcard, none = no key.
     let dot = btn.querySelector(".cc-pdot");
-    if (hasKey && !dot) {
-      dot = Object.assign(document.createElement("span"), { className: "cc-pdot" });
-      dot.style.cssText = "width:5px;height:5px;border-radius:50%;background:#a6e3a1;flex-shrink:0;";
-      btn.appendChild(dot);
-    } else if (!hasKey && dot) { dot.remove(); }
+    if (usable) {
+      if (!dot) {
+        dot = Object.assign(document.createElement("span"), { className: "cc-pdot" });
+        dot.style.cssText = "width:5px;height:5px;border-radius:50%;flex-shrink:0;";
+        btn.appendChild(dot);
+      }
+      dot.style.background = viaWildcard ? "#74c7ec" : "#a6e3a1";
+      dot.title = viaWildcard ? "Available via wildcard provider" : "Key configured";
+    } else if (dot) {
+      dot.remove();
+    }
   });
 }
 
@@ -1296,10 +1418,16 @@ function createSettingsModal() {
       else if (state === "unsupported") { badge = "Unavailable on this host"; badgeColor = "#585b70"; }
       else if (state === "error") { badge = "Probe error"; badgeColor = "#f38ba8"; }
 
-      // Which backends support in-panel sign-in / re-login.  LiteLLM has no
-      // CLI auth (it uses API keys), Gemini CLI doesn't expose a
-      // non-interactive auth flow we can drive.
-      const supportsAuth = id === "claude-code" || id === "codex";
+      // Which backends support in-panel re-login.  LiteLLM has no CLI auth
+      // (it uses API keys).  Claude / Codex run their full auth flow inside
+      // a modal.  Gemini has no non-TUI auth subcommand, so its "Re-login"
+      // is really "forget login" (deletes ~/.gemini/oauth_creds.json) plus
+      // a hint to run `gemini` in a terminal afterwards.
+      const supportsRelogin = id === "claude-code" || id === "codex" || id === "gemini-cli";
+      const reloginLabel = id === "gemini-cli" ? "Forget login" : "Re-login";
+      const reloginTitle = id === "gemini-cli"
+        ? "Delete cached Gemini credentials. You'll need to run `gemini` in a terminal afterwards."
+        : "Sign out and sign back in (useful for switching accounts).";
 
       // Action buttons.
       const actions = [];
@@ -1312,15 +1440,12 @@ function createSettingsModal() {
         actions.push(`<span style="font-size:11px; color:#a6e3a1; font-weight:600;
                                    align-self:center;">● Active</span>`);
       }
-      // Re-login button when already connected — useful for switching ChatGPT
-      // / Claude accounts without having to drop to a terminal.  We omit it
-      // for backends that don't have a re-loginable concept (LiteLLM,
-      // Gemini CLI).
-      if (state === "ok" && supportsAuth) {
+      if (state === "ok" && supportsRelogin) {
         actions.push(`<button class="cc-agent-btn" data-action="relogin" data-be="${id}"
+                              title="${escHtml(reloginTitle)}"
                               style="background:transparent; color:#cdd6f4;
                                      border:1px solid #45475a;">
-                        Re-login
+                        ${escHtml(reloginLabel)}
                       </button>`);
       }
       if (state === "needs_install" && st.can_install) {
@@ -1433,21 +1558,48 @@ function createSettingsModal() {
 
   // ── Providers tab ────────────────────────────────────────────────────────────
   function _renderProvidersTab(container) {
-    container.innerHTML = Object.entries(PROVIDERS).map(([key, prov]) => {
-      const apiKey  = escAttr(_getPS(key, "apiKey"));
-      const baseUrl = escAttr(_getPS(key, "baseUrl"));
-      const hasKey  = !!_getPS(key, "apiKey");
+    // The "custom" provider is a virtual tab — it has no API key form, just
+    // hosts user-defined models surfaced through the dedicated section
+    // appended at the bottom of this tab.
+    const providerCards = Object.entries(PROVIDERS).filter(([key]) => key !== "custom");
+    const providerCardsHtml = providerCards.map(([key, prov]) => {
+      const apiKey   = escAttr(_getPS(key, "apiKey"));
+      const baseUrl  = escAttr(_getPS(key, "baseUrl"));
+      const hasKey   = !!_getPS(key, "apiKey");
+      const onServer = !!_serverProvKeys.providers?.[key];
+      const wildcards = _serverProvKeys.wildcards || [];
+      const usable   = hasKey || onServer || key === "ollama" || wildcards.length > 0;
+
+      // Build a status line that matches what the LiteLLM provider bar is
+      // actually doing.  Same priority order as _isProviderUsable.
+      let dotColor = "#45475a";
+      let label    = "Not configured";
+      let labelClr = "#585b70";
+      if (hasKey) {
+        dotColor = "#a6e3a1"; labelClr = "#a6e3a1";
+        label = "Key configured in panel";
+      } else if (onServer) {
+        dotColor = "#a6e3a1"; labelClr = "#a6e3a1";
+        label = "Key found in server env";
+      } else if (key === "ollama") {
+        dotColor = "#a6e3a1"; labelClr = "#a6e3a1";
+        label = "Local — no key required";
+      } else if (wildcards.length > 0) {
+        dotColor = "#74c7ec"; labelClr = "#74c7ec";
+        label = `Routed via ${wildcards.join(" / ")} (wildcard)`;
+      } else {
+        label = "No key — set one below or in the server's .env";
+      }
       return `
-        <div style="background:#313244; border-radius:12px; padding:14px 16px; margin-bottom:12px;">
+        <div style="background:#313244; border-radius:12px; padding:14px 16px;
+                    margin-bottom:12px; ${usable ? "" : "opacity:0.85;"}">
           <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
             <span style="font-size:20px; opacity:0.9;">${prov.emoji}</span>
             <span style="font-weight:700; font-size:13px;">${prov.label}</span>
             <span class="cc-key-dot" data-pkey="${key}"
                   style="width:7px;height:7px;border-radius:50%;flex-shrink:0;
-                         background:${hasKey ? "#a6e3a1" : "#45475a"};"></span>
-            <span style="font-size:11px; color:${hasKey ? "#a6e3a1" : "#45475a"};">
-              ${hasKey ? "Key configured" : "No key — uses env var"}
-            </span>
+                         background:${dotColor};"></span>
+            <span style="font-size:11px; color:${labelClr};">${label}</span>
           </div>
           <div style="margin-bottom:10px;">
             <label style="${_settingsLabelStyle()}">API Key</label>
@@ -1477,16 +1629,133 @@ function createSettingsModal() {
       `;
     }).join("");
 
+    // "Custom models" section — lets the user pin a litellm-format model id
+    // (e.g. ``anthropic/claude-opus-4-7`` or ``openrouter/minimax/abab6``)
+    // to a tab so it shows up in the LiteLLM model dropdown.
+    const tabOptions = providerCards
+      .map(([k, p]) => `<option value="${k}">${escHtml(p.label)}</option>`)
+      .join("") + `<option value="custom" selected>✨ Custom (catch-all)</option>`;
+
+    const customListHtml = _customModels.length === 0
+      ? `<div style="font-size:11px; color:#585b70; padding:8px 4px;">
+           No custom models yet. Add one below to use a newly-released model
+           or an exotic route (e.g. MiniMax via OpenRouter).
+         </div>`
+      : _customModels.map((m) => {
+          const tabLabel = PROVIDERS[m.tab]?.label || "Custom";
+          return `
+            <div class="cc-custom-row" data-cm-id="${escAttr(m.id)}"
+                 style="display:flex; align-items:center; gap:8px;
+                        padding:8px 10px; margin-bottom:6px;
+                        background:#1e1e2e; border:1px solid #45475a;
+                        border-radius:8px;">
+              <span style="font-size:10px; color:#cba6f7; font-weight:700;
+                           text-transform:uppercase; letter-spacing:0.5px;
+                           padding:2px 7px; border:1px solid #45475a;
+                           border-radius:4px; flex-shrink:0;">
+                ${escHtml(tabLabel)}
+              </span>
+              <div style="flex:1; min-width:0;">
+                <div style="font-size:12px; font-weight:600; color:#cdd6f4;">
+                  ${escHtml(m.label)}
+                </div>
+                <div style="font-size:10px; color:#7f849c;
+                            font-family:ui-monospace,Menlo,Consolas,monospace;
+                            overflow:hidden; text-overflow:ellipsis;
+                            white-space:nowrap;"
+                     title="${escAttr(m.id)}">
+                  ${escHtml(m.id)}
+                </div>
+              </div>
+              <button class="cc-custom-remove" data-cm-id="${escAttr(m.id)}"
+                      title="Remove this model"
+                      style="background:transparent; border:1px solid #45475a;
+                             color:#f38ba8; border-radius:6px;
+                             padding:4px 10px; font-size:11px; cursor:pointer;
+                             flex-shrink:0;">
+                Remove
+              </button>
+            </div>
+          `;
+        }).join("");
+
+    const customSectionHtml = `
+      <div style="background:#313244; border-radius:12px;
+                  padding:14px 16px; margin-top:6px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+          <span style="font-size:18px;">✨</span>
+          <span style="font-weight:700; font-size:13px;">Custom models</span>
+          <span style="font-size:11px; color:#7f849c;">
+            — LiteLLM model IDs the panel doesn't ship with
+          </span>
+        </div>
+
+        <div id="cc-custom-models-list" style="margin-bottom:12px;">
+          ${customListHtml}
+        </div>
+
+        <div style="display:grid;
+                    grid-template-columns:1fr 1fr auto auto;
+                    gap:6px; align-items:end;">
+          <div>
+            <label style="${_settingsLabelStyle()}">Model ID</label>
+            <input id="cc-custom-id" type="text" spellcheck="false" autocomplete="off"
+                   placeholder="anthropic/claude-opus-4-7"
+                   style="${_settingsInputStyle("font-family:ui-monospace,Menlo,Consolas,monospace;")}">
+          </div>
+          <div>
+            <label style="${_settingsLabelStyle()}">Display name</label>
+            <input id="cc-custom-label" type="text" spellcheck="false" autocomplete="off"
+                   placeholder="Claude Opus 4.7"
+                   style="${_settingsInputStyle()}">
+          </div>
+          <div>
+            <label style="${_settingsLabelStyle()}">Tab</label>
+            <select id="cc-custom-tab" style="${_settingsInputStyle("cursor:pointer;")}">
+              ${tabOptions}
+            </select>
+          </div>
+          <button id="cc-custom-add"
+                  style="padding:8px 16px; background:#cba6f7; color:#1e1e2e;
+                         border:none; border-radius:8px; font-weight:700;
+                         font-size:12px; cursor:pointer; height:34px;">
+            Add
+          </button>
+        </div>
+        <p style="margin:8px 0 0; font-size:10px; color:#585b70; line-height:1.5;">
+          Tip: the model ID must be the full LiteLLM identifier
+          (provider prefix + model name). Anthropic models route via
+          <code>ANTHROPIC_API_KEY</code>, OpenAI via <code>OPENAI_API_KEY</code>,
+          OpenRouter models via <code>OPENROUTER_API_KEY</code>, etc.
+        </p>
+      </div>
+    `;
+
+    container.innerHTML = providerCardsHtml + customSectionHtml;
+
+    // Compute the dot colour + status label for a single provider — same
+    // priority order as ``_isProviderUsable``.  Pulled out so we can refresh
+    // just one row inline without losing input focus.
+    const _statusForProvider = (pkey) => {
+      const hasKey   = !!_getPS(pkey, "apiKey");
+      const onServer = !!_serverProvKeys.providers?.[pkey];
+      const wcs      = _serverProvKeys.wildcards || [];
+      if (hasKey)            return { dot: "#a6e3a1", clr: "#a6e3a1", text: "Key configured in panel" };
+      if (onServer)          return { dot: "#a6e3a1", clr: "#a6e3a1", text: "Key found in server env" };
+      if (pkey === "ollama") return { dot: "#a6e3a1", clr: "#a6e3a1", text: "Local — no key required" };
+      if (wcs.length > 0)    return { dot: "#74c7ec", clr: "#74c7ec", text: `Routed via ${wcs.join(" / ")} (wildcard)` };
+      return { dot: "#45475a", clr: "#585b70", text: "No key — set one below or in the server's .env" };
+    };
+
     // Wire input events
     container.querySelectorAll(".cc-ps-inp").forEach(inp => {
       inp.addEventListener("input", () => {
         _setPS(inp.dataset.pkey, inp.dataset.field, inp.value);
-        // Update dot in this form
-        const hasKey = !!_getPS(inp.dataset.pkey, "apiKey");
+        const st = _statusForProvider(inp.dataset.pkey);
         const dot = container.querySelector(`.cc-key-dot[data-pkey="${inp.dataset.pkey}"]`);
         const lbl = dot?.nextElementSibling;
-        if (dot) { dot.style.background = hasKey ? "#a6e3a1" : "#45475a"; }
-        if (lbl) { lbl.style.color = hasKey ? "#a6e3a1" : "#45475a"; lbl.textContent = hasKey ? "Key configured" : "No key — uses env var"; }
+        if (dot) dot.style.background = st.dot;
+        if (lbl) { lbl.style.color = st.clr; lbl.textContent = st.text; }
       });
       inp.addEventListener("focus",  () => { inp.style.borderColor = "#cba6f7"; });
       inp.addEventListener("blur",   () => { inp.style.borderColor = "#45475a"; });
@@ -1496,6 +1765,48 @@ function createSettingsModal() {
       btn.addEventListener("click", () => {
         const inp = container.querySelector(`.cc-ps-inp[data-pkey="${btn.dataset.pkey}"][data-field="apiKey"]`);
         if (inp) inp.type = inp.type === "password" ? "text" : "password";
+      });
+    });
+
+    // Custom-models add/remove + reactive refresh of the LiteLLM provider bar
+    // and the active provider's dropdown.
+    const afterCustomChange = () => {
+      _refreshProvDots(); // hide/show Custom tab
+      // Re-populate the active tab's model dropdown so newly-added customs
+      // show up immediately without having to click the tab.
+      const cur = document.getElementById("comfyclaw-provider-state")?.dataset.provider;
+      if (cur) _setActiveProvider(cur, false);
+      _renderProvidersTab(container); // refresh the list above
+    };
+
+    container.querySelector("#cc-custom-add")?.addEventListener("click", () => {
+      const idEl    = container.querySelector("#cc-custom-id");
+      const lblEl   = container.querySelector("#cc-custom-label");
+      const tabEl   = container.querySelector("#cc-custom-tab");
+      const id  = (idEl?.value  || "").trim();
+      const lbl = (lblEl?.value || "").trim() || id;
+      const tab = (tabEl?.value || "custom").trim();
+      if (!id) {
+        showToast("Enter a LiteLLM model ID first (e.g. anthropic/claude-opus-4-7).", "warning", 4000);
+        idEl?.focus();
+        return;
+      }
+      if (!id.includes("/")) {
+        showToast("Model ID should look like 'provider/model-name'.", "warning", 4000);
+        idEl?.focus();
+        return;
+      }
+      _addCustomModel(id, lbl, tab);
+      showToast(`Added ${lbl} (${tab}).`, "success", 2500);
+      afterCustomChange();
+    });
+
+    container.querySelectorAll(".cc-custom-remove").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.dataset.cmId;
+        if (!id) return;
+        _removeCustomModel(id);
+        afterCustomChange();
       });
     });
   }
@@ -1713,6 +2024,28 @@ function _updateNodeCount(n) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function _setActiveProvider(key, updateSession = true) {
+  // Fall back gracefully if the saved provider has been removed in a newer
+  // version of the panel (e.g. Groq sessions saved before we dropped that
+  // tab).  Without this guard the dropdown silently empties out.
+  if (!PROVIDERS[key]) {
+    key = "anthropic";
+  }
+  // Bounce non-usable providers (no API key, no wildcard) to Settings →
+  // Providers — but only when this is a user-initiated click.  On initial
+  // panel mount the WS probe hasn't run yet, so we'd otherwise nag the
+  // user about a key the server actually does have.
+  if (updateSession && !_isProviderUsable(key)) {
+    const label = PROVIDERS[key]?.label || key;
+    showToast(
+      `${label} isn't configured yet. Add an API key in Settings → Providers.`,
+      "warning",
+      4500,
+    );
+    if (!_settingsModal) _settingsModal = createSettingsModal();
+    _settingsModal.openTo("providers");
+    return;
+  }
+
   const stateEl = document.getElementById("comfyclaw-provider-state");
   if (stateEl) stateEl.dataset.provider = key;
   // Highlight buttons
@@ -1724,16 +2057,23 @@ function _setActiveProvider(key, updateSession = true) {
     btn.style.color        = isActive ? c : "#585b70";
     btn.style.fontWeight   = isActive ? "700" : "500";
   });
-  // Populate model dropdown
+  // Populate model dropdown — built-ins first, then any user-defined
+  // entries assigned to this tab (rendered with a ✨ prefix so the user
+  // can tell their own additions apart from the bundled list).
   const modelEl = document.getElementById("comfyclaw-gen-model");
   if (!modelEl) return;
   const prov = PROVIDERS[key];
   if (!prov) return;
   const prev = modelEl.value;
-  modelEl.innerHTML = `<option value="">Server default</option>`
-    + prov.models.map(m => `<option value="${m.value}">${m.label}</option>`).join("");
+  const opts = _modelsForProvider(key);
+  modelEl.innerHTML =
+    `<option value="">Server default</option>` +
+    opts.map((m) => {
+      const label = m.custom ? `✨ ${m.label}` : m.label;
+      return `<option value="${escAttr(m.value)}">${escHtml(label)}</option>`;
+    }).join("");
   // Restore previous selection if still valid
-  if (prev && modelEl.querySelector(`[value="${prev}"]`)) modelEl.value = prev;
+  if (prev && modelEl.querySelector(`[value="${CSS.escape(prev)}"]`)) modelEl.value = prev;
   if (updateSession) _captureCurrentSession();
   _refreshProvDots();
 }
@@ -2681,14 +3021,19 @@ function createComfyClawPanel() {
                   <span>Server default</span>
                 </div>`;
     for (const [key, prov] of Object.entries(PROVIDERS)) {
+      const models = _modelsForProvider(key);
+      // Skip empty tabs (chiefly the Custom catch-all when the user
+      // hasn't pinned anything to it yet) so the popover stays tidy.
+      if (models.length === 0) continue;
       html += `<div class="cc-popover-section-label" style="color:${prov.color};">
-                 ${prov.emoji} ${prov.label}
+                 ${prov.emoji} ${escHtml(prov.label)}
                </div>`;
-      for (const m of prov.models) {
+      for (const m of models) {
         const active = m.value === curVal;
-        html += `<div class="cc-popover-item" data-val="${m.value}" data-prov="${key}"${active ? ' data-active="1"' : ""}>
+        const label = m.custom ? `✨ ${escHtml(m.label)}` : escHtml(m.label);
+        html += `<div class="cc-popover-item" data-val="${escAttr(m.value)}" data-prov="${key}"${active ? ' data-active="1"' : ""}>
                    <span class="cc-popover-icon">${active ? "✓" : ""}</span>
-                   <span>${m.label}</span>
+                   <span>${label}</span>
                  </div>`;
       }
     }
@@ -2708,7 +3053,7 @@ function createComfyClawPanel() {
         if (provKey) _setActiveProvider(provKey);
         if (modelSelectEl) {
           // Ensure the option exists (provider switch repopulates the select).
-          if (!modelSelectEl.querySelector(`[value="${v}"]`) && v) {
+          if (v && !modelSelectEl.querySelector(`[value="${CSS.escape(v)}"]`)) {
             const opt = document.createElement("option");
             opt.value = v; opt.textContent = v;
             modelSelectEl.appendChild(opt);
@@ -3006,22 +3351,175 @@ function createComfyClawPanel() {
   function _openSignInModal(backendId, opts = {}) {
     if (backendId === "claude-code") return _openClaudeAuthModal(backendId, opts);
     if (backendId === "codex")        return _openCodexAuthModal(backendId, opts);
-    if (backendId === "gemini-cli") {
-      // Gemini CLI doesn't expose a non-interactive auth flow we can drive
-      // from outside its TUI, so point the user at the install button +
-      // running `gemini` once.
-      showToast(
-        "Run `gemini` once in a terminal to complete the Google OAuth prompt. " +
-        "Credentials get cached to ~/.gemini/oauth_creds.json.",
-        "info",
-        7000,
-      );
-      return;
-    }
+    if (backendId === "gemini-cli")   return _openGeminiAuthModal(backendId, opts);
     showToast(
       `No in-panel sign-in for ${backendId} yet.`,
       "warning",
       4000,
+    );
+  }
+
+  // Gemini "auth modal" — the CLI has no non-TUI sign-in subcommand, so this
+  // is really a "forget login" button + instructions for the new sign-in.
+  // ``opts.force`` controls whether we offer the destructive action: a plain
+  // Sign in just tells the user what to do, Re-login asks the server to wipe
+  // cached creds first.
+  function _openGeminiAuthModal(backendId, opts = {}) {
+    if (backendId !== "gemini-cli") return;
+    if (_authModal?.isOpen?.()) return;
+    const force = !!opts.force;
+
+    const body = document.createElement("div");
+    body.style.cssText = "font-size:12px;line-height:1.6;color:var(--cc-fg);";
+    const statusEl = document.createElement("div");
+    statusEl.style.cssText = "font-size:11px;color:var(--cc-fg-muted);margin-top:14px;";
+    const container = document.createElement("div");
+    container.appendChild(body);
+    container.appendChild(statusEl);
+
+    _authModal = openModal({
+      title: force ? "Forget Gemini sign-in" : "Sign in to Gemini CLI",
+      subtitle: force
+        ? "Delete cached Google OAuth credentials"
+        : "Gemini's sign-in is interactive — runs in a terminal",
+      body: container,
+      width: 540,
+      onClose: () => { _authModal = null; },
+    });
+    _authModal._inFlight = false;
+    _authModal._backendId = backendId;
+    _authModal._setStatus = (text, kind) => {
+      statusEl.textContent = text;
+      statusEl.style.color =
+        kind === "error" ? "var(--cc-accent-red)" :
+        kind === "ok"    ? "var(--cc-accent-green)" :
+        "var(--cc-fg-muted)";
+    };
+
+    const renderIntro = () => {
+      body.innerHTML = force
+        ? `
+          <div style="margin-bottom:12px;">
+            <strong>Sign out from Gemini CLI</strong>
+            <div style="font-size:11px;color:var(--cc-fg-muted);margin-top:6px;line-height:1.5;">
+              This deletes <code>~/.gemini/oauth_creds.json</code> and
+              <code>~/.gemini/google_accounts.json</code> so the CLI is
+              no longer linked to any Google account.
+              <br><br>
+              After that, run <code>gemini</code> once in a terminal — the
+              CLI will open the Google OAuth flow and let you pick a
+              different account.
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">
+            <button class="cc-gemini-forget"
+                    style="background:var(--cc-accent-red, #f38ba8);color:#1e1e2e;
+                           border:none;border-radius:8px;padding:8px 14px;
+                           font-weight:700;font-size:12px;cursor:pointer;">
+              Forget login
+            </button>
+            <button class="cc-gemini-cancel"
+                    style="background:transparent;border:1px solid var(--cc-border);
+                           color:var(--cc-fg);border-radius:8px;padding:8px 14px;
+                           font-size:12px;cursor:pointer;">
+              Cancel
+            </button>
+          </div>
+        `
+        : `
+          <div style="margin-bottom:8px;">
+            <strong>Gemini sign-in is interactive</strong>
+            <div style="font-size:11px;color:var(--cc-fg-muted);margin-top:6px;line-height:1.5;">
+              Gemini CLI doesn't expose a non-interactive auth command, so
+              ComfyClaw can't drive the OAuth flow from inside this dialog.
+              <br><br>
+              <strong>What to do:</strong> open a terminal on this machine
+              and run:
+              <div style="margin:8px 0;padding:8px 10px;
+                          background:var(--cc-surface-tint);
+                          border:1px solid var(--cc-border);border-radius:6px;
+                          font-family:ui-monospace,Menlo,Consolas,monospace;
+                          font-size:12px;color:var(--cc-fg);">
+                gemini
+              </div>
+              The first prompt picks a Google account and stores the
+              credentials in <code>~/.gemini/oauth_creds.json</code>.
+              Press <kbd>Re-check</kbd> on the Agents tab afterwards to
+              see the status flip green.
+            </div>
+          </div>
+        `;
+
+      if (force) {
+        body.querySelector(".cc-gemini-forget")?.addEventListener("click", () => {
+          _authModal._inFlight = true;
+          _authModal._setStatus("Deleting cached credentials…", "info");
+          if (!_wsSend({
+            type: "backend_auth_start",
+            backend: backendId,
+            force: true,
+          })) {
+            _authModal._setStatus("Sync server is not connected.", "error");
+            _authModal._inFlight = false;
+          }
+        });
+        body.querySelector(".cc-gemini-cancel")?.addEventListener("click", () => {
+          _authModal?.close?.();
+        });
+      }
+    };
+
+    // Public surface the global WS dispatcher calls into.  No URL/code in
+    // this flow — the only thing that matters is _showSuccess / _showFailure.
+    _authModal._showWaiting    = () => {};
+    _authModal._showSignInLink = () => {};
+    _authModal._showDeviceCode = () => {};
+    _authModal._showSuccess = (detail) => {
+      body.innerHTML = `
+        <div style="display:flex;align-items:flex-start;gap:10px;
+                    color:var(--cc-accent-green);">
+          <span style="font-size:18px;">✓</span>
+          <div>
+            <div style="font-weight:600;">Signed out of Gemini CLI</div>
+            <div style="font-size:11px;color:var(--cc-fg-muted);margin-top:4px;
+                        line-height:1.5;">
+              ${escHtml(detail || "")}
+            </div>
+            <div style="margin-top:10px;font-size:11px;color:var(--cc-fg-muted);
+                        line-height:1.5;">
+              Next, run <code>gemini</code> in a terminal to sign in with
+              a different Google account. The Agents tab will refresh once
+              you re-check.
+            </div>
+          </div>
+        </div>
+      `;
+      _authModal._setStatus("You can close this dialog.", "ok");
+      _authModal._inFlight = false;
+    };
+    _authModal._showFailure = (detail) => {
+      body.innerHTML = `
+        <div style="display:flex;align-items:flex-start;gap:10px;
+                    color:var(--cc-accent-red);">
+          <span style="font-size:18px;">✕</span>
+          <div>
+            <div style="font-weight:600;">Couldn't sign out</div>
+            <div style="font-size:11px;color:var(--cc-fg-muted);margin-top:4px;
+                        line-height:1.5;word-break:break-word;">
+              ${escHtml(detail || "")}
+            </div>
+          </div>
+        </div>
+      `;
+      _authModal._inFlight = false;
+    };
+
+    renderIntro();
+    _authModal._setStatus(
+      force
+        ? "Cached at ~/.gemini/oauth_creds.json"
+        : "No-op for this flow — read the instructions above.",
+      "info",
     );
   }
 
@@ -3873,6 +4371,7 @@ function _augmentPanelWithTabs(panel) {
       const ws = _activeSyncClient?.ws;
       if (ws?.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "list_agent_backends" }));
+        ws.send(JSON.stringify({ type: "list_provider_keys" }));
       }
     };
     setTimeout(askBackends, 800);
@@ -4359,6 +4858,25 @@ class SyncClient {
       // host → picker falls back to litellm) into the composer chip.
       document.getElementById("cc-composer-backend-chip")
               ?.dispatchEvent(new CustomEvent("cc-backend-refresh"));
+
+    } else if (msg.type === "provider_keys") {
+      // Server tells us which LiteLLM provider env-vars it has set, plus any
+      // wildcard providers (OpenRouter / Azure).  We use this to dim
+      // unconfigured provider buttons in the LiteLLM model picker.
+      _serverProvKeys = {
+        providers: msg.providers || {},
+        wildcards: Array.isArray(msg.wildcards) ? msg.wildcards : [],
+      };
+      _refreshProvDots();
+      // If the currently-active provider just became unusable (rare, but the
+      // user might have removed an env var on the server), snap to the first
+      // usable one so the model dropdown isn't pointing at a dead provider.
+      const stateEl = document.getElementById("comfyclaw-provider-state");
+      const cur = stateEl?.dataset.provider;
+      if (cur && !_isProviderUsable(cur)) {
+        const fallback = Object.keys(PROVIDERS).find(_isProviderUsable);
+        if (fallback) _setActiveProvider(fallback, false);
+      }
 
     // ── Backend setup flows: install + OAuth ─────────────────────────────────
     } else if (msg.type === "backend_install_progress") {
