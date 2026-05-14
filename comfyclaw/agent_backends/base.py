@@ -462,6 +462,9 @@ def probe_all() -> list[BackendStatus]:
 
     # ── codex ────────────────────────────────────────────────────────────────
     codex_bin = shutil.which("codex") or ""
+    # We can drive the install ourselves if either brew (mac) or npm (any
+    # platform with Node.js) is on PATH — see ``setup_flows._INSTALL_COMMANDS``.
+    codex_installer = bool(shutil.which("brew") or shutil.which("npm"))
     if not codex_bin:
         out.append(
             BackendStatus(
@@ -473,7 +476,7 @@ def probe_all() -> list[BackendStatus]:
                     "or `npm i -g @openai/codex`, then sign in with your "
                     "ChatGPT account."
                 ),
-                can_install=False,  # no scripted installer; pointers in detail
+                can_install=codex_installer,
             )
         )
     else:
@@ -486,12 +489,13 @@ def probe_all() -> list[BackendStatus]:
                 binary_path=codex_bin,
                 auth_method=c_method,
                 detail=c_detail or f"`codex` at {codex_bin}",
-                can_install=False,
+                can_install=codex_installer,
             )
         )
 
     # ── gemini-cli ───────────────────────────────────────────────────────────
     gemini_bin = shutil.which("gemini") or ""
+    gemini_installer = bool(shutil.which("npm"))
     if not gemini_bin:
         out.append(
             BackendStatus(
@@ -503,7 +507,7 @@ def probe_all() -> list[BackendStatus]:
                     "`npm i -g @google/gemini-cli`, then run `gemini` once "
                     "and sign in with your Google account."
                 ),
-                can_install=False,
+                can_install=gemini_installer,
             )
         )
     else:
@@ -516,7 +520,7 @@ def probe_all() -> list[BackendStatus]:
                 binary_path=gemini_bin,
                 auth_method=g_method,
                 detail=g_detail or f"`gemini` at {gemini_bin}",
-                can_install=False,
+                can_install=gemini_installer,
             )
         )
     return out

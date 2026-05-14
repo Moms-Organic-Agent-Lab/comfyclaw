@@ -48,9 +48,14 @@ Message types (client → server):
   restore_checkpoint
   list_checkpoints
   list_agent_backends
-  backend_install_start    — kick off CLI installer (claude only for now)
+  backend_install_start    — kick off CLI installer
+                              (claude-code / codex / gemini-cli)
   backend_install_cancel
-  backend_auth_start       — drive `claude auth login` paste-back OAuth
+  backend_auth_start       — drive sign-in flow for claude-code or codex.
+                              Optional ``auth_method`` selects the variant
+                              ("claudeai"/"console" for claude; "browser"/
+                              "device_code" for codex).  ``force=True``
+                              runs ``<binary> logout`` first (re-login).
   backend_auth_paste_code  — forward the redirect URL into claude's stdin
   backend_auth_cancel
 
@@ -667,10 +672,10 @@ class SyncServer:
         asyncio.run_coroutine_threadsafe(self._send_agent_backends(ws), self._loop)
 
     async def _handle_backend_install_start(self, ws: Any, msg: dict) -> None:
-        from .setup_flows import ClaudeInstallFlow
+        from .setup_flows import CliInstallFlow, _INSTALL_COMMANDS
 
         backend = msg.get("backend", "claude-code")
-        if backend != "claude-code":
+        if backend not in _INSTALL_COMMANDS:
             self._send_json_to(
                 ws,
                 {
@@ -720,7 +725,7 @@ class SyncServer:
             self._setup_flows.pop(ws)
             self._broadcast_agent_backends(ws)
 
-        flow = ClaudeInstallFlow(on_line=on_line, on_complete=on_complete)
+        flow = CliInstallFlow(backend, on_line=on_line, on_complete=on_complete)
         prev = self._setup_flows.set(ws, flow)
         if prev:
             try:
@@ -733,7 +738,7 @@ class SyncServer:
                 "type": "backend_install_progress",
                 "backend": backend,
                 "level": "info",
-                "line": f"Starting install: {flow.command}",
+                "line": f"Starting install: {flow.command or '<no candidate on PATH>'}",
             },
         )
         flow.start()
@@ -814,13 +819,16 @@ class SyncServer:
             except Exception:  # noqa: BLE001
                 pass
 
+        force = bool(msg.get("force", False))
+
         if isinstance(flow, ClaudeAuthFlow):
             auth_method = (msg.get("auth_method") or "claudeai").strip() or "claudeai"
-            flow.start(auth_method=auth_method)
+            flow.start(auth_method=auth_method, force=force)
         else:
-            # CodexAuthFlow only supports one mode (device-code OAuth) — the
-            # `auth_method` field on the WS payload is ignored for it.
-            flow.start()
+            # CodexAuthFlow now supports two modes — "browser" (default; uses
+            # the local 1455 callback) and "device_code" (headless servers).
+            mode = (msg.get("auth_method") or "browser").strip() or "browser"
+            flow.start(mode=mode, force=force)
 
     def _handle_backend_auth_paste(self, ws: Any, msg: dict) -> None:
         from .setup_flows import ClaudeAuthFlow, CodexAuthFlow

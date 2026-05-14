@@ -10,12 +10,22 @@ clean lifecycle.
 
 Currently implemented:
 
-* :class:`ClaudeInstallFlow` — runs the official curl-piped installer
-  ``curl -fsSL https://claude.ai/install.sh | bash``.
+* :class:`CliInstallFlow` — generic "bash -lc <pinned cmd>" installer for
+  Claude Code (``curl | bash``), Codex (Homebrew or npm) and Gemini CLI
+  (npm). Each install command is pinned in :data:`_INSTALL_COMMANDS` so the
+  WebSocket payload can never override what we run.
 * :class:`ClaudeAuthFlow` — drives ``claude auth login`` in
   paste-back mode: scrape the ``Open in browser:`` URL from stdout,
   forward it to the panel, accept the user-pasted redirect URL,
   feed it back over stdin.
+* :class:`CodexAuthFlow` — drives ``codex login`` in either browser
+  (default — captures the URL printed by codex's local 1455 server) or
+  device-code mode (``codex login --device-auth`` — URL + 8-char code
+  for headless setups).
+
+All auth flows accept a ``force=True`` flag at start time that first runs
+the backend's ``<binary> logout`` so the user can switch accounts without
+having to drop to a terminal.
 
 Both flows are thread-based (the WebSocket server runs on asyncio in a
 background thread; flows run their own background reader threads and
@@ -47,10 +57,44 @@ from .agent_backends.base import (
 log = logging.getLogger(__name__)
 
 
-# ── Trusted installer command — never accepted from the panel ────────────────
-# The installer URL is pinned here so the WebSocket payload can never override
-# what we curl-pipe into bash.
+# ── Trusted installer commands — never accepted from the panel ───────────────
+# Pinned here so the WebSocket payload can never override the shell command we
+# end up running.  Each entry maps a backend id to an ordered list of candidate
+# commands; we pick the first whose first token is on PATH.  This lets us pick
+# Homebrew over npm on macOS, fall back to npm on Linux, etc.
 _CLAUDE_INSTALL_CMD = "curl -fsSL https://claude.ai/install.sh | bash"
+_INSTALL_COMMANDS: dict[str, list[str]] = {
+    "claude-code": [
+        # The Anthropic installer auto-detects npm/native, so we just always
+        # use it.  curl -fsSL fails fast on TLS errors / 404 / etc.
+        _CLAUDE_INSTALL_CMD,
+    ],
+    "codex": [
+        # Homebrew on macOS keeps the binary on a stable path that gets picked
+        # up by ``which codex`` in subsequent terminals.  npm is the
+        # everywhere-fallback.
+        "brew install codex",
+        "npm install -g @openai/codex",
+    ],
+    "gemini-cli": [
+        "npm install -g @google/gemini-cli",
+    ],
+}
+
+
+def _pick_install_command(backend: str) -> str | None:
+    """Return the first install command for *backend* whose binary is on PATH.
+
+    The first token of each command (``brew`` / ``npm`` / ``curl``) must be
+    resolvable by :func:`shutil.which`; otherwise we try the next candidate.
+    Returns ``None`` if no candidate's binary is installed.
+    """
+    candidates = _INSTALL_COMMANDS.get(backend, [])
+    for cmd in candidates:
+        first = cmd.strip().split(None, 1)[0]
+        if shutil.which(first):
+            return cmd
+    return None
 
 
 # Regex that matches the line the Claude CLI prints when it can't auto-open
@@ -74,6 +118,17 @@ _AUTH_URL_HINTS: tuple[str, ...] = ("oauth", "authorize", "claude.ai", "anthropi
 
 LineCallback = Callable[[str, str], None]
 """``(level, text)`` where level is 'stdout' | 'stderr' | 'info' | 'error'."""
+
+
+# Strip ANSI styling sequences (the SGR family — colours, bold, etc.) before
+# forwarding subprocess output to the browser, which doesn't render them and
+# would otherwise show literal junk like ``[90mDevice codes…[0m``.  We keep
+# the URL- and code-matching regexes operating on this cleaned string too.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def _strip_ansi(s: str) -> str:
+    return _ANSI_RE.sub("", s)
 
 
 class _BaseFlow:
@@ -119,24 +174,35 @@ class _BaseFlow:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class ClaudeInstallFlow(_BaseFlow):
-    """Run the official Claude Code curl installer and stream output."""
+class CliInstallFlow(_BaseFlow):
+    """Run a pinned ``bash -lc <cmd>`` installer for a CLI backend.
 
-    name = "claude-install"
+    The shell command is looked up from :data:`_INSTALL_COMMANDS` by the
+    *backend* identifier — the caller cannot pass an arbitrary command.
+    """
+
+    name = "cli-install"
 
     def __init__(
         self,
+        backend: str,
         on_line: LineCallback,
         on_complete: Callable[[bool, str], None],
     ) -> None:
         super().__init__()
+        self._backend = backend
         self._on_line = on_line
         self._on_complete = on_complete
         self._reader: threading.Thread | None = None
+        self._command: str = _pick_install_command(backend) or ""
 
     @property
     def command(self) -> str:
-        return _CLAUDE_INSTALL_CMD
+        return self._command
+
+    @property
+    def backend(self) -> str:
+        return self._backend
 
     def start(self) -> None:
         """Spawn the installer subprocess. Returns immediately; output streams
@@ -145,9 +211,21 @@ class ClaudeInstallFlow(_BaseFlow):
             self._on_line("info", "[install] Already running")
             return
 
+        if not self._command:
+            tried = _INSTALL_COMMANDS.get(self._backend, [])
+            hint = (
+                f"None of {[c.split()[0] for c in tried]} is on PATH. "
+                "Install one of them (Homebrew or Node.js) and try again."
+                if tried
+                else f"No installer is registered for {self._backend!r}."
+            )
+            self._on_line("error", hint)
+            self._on_complete(False, hint)
+            return
+
         try:
             self._proc = subprocess.Popen(
-                ["bash", "-lc", _CLAUDE_INSTALL_CMD],
+                ["bash", "-lc", self._command],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -161,8 +239,12 @@ class ClaudeInstallFlow(_BaseFlow):
             return
 
         self._started_at = time.time()
-        self._on_line("info", f"$ {_CLAUDE_INSTALL_CMD}")
-        self._reader = threading.Thread(target=self._pump, daemon=True, name="claude-install-pump")
+        self._on_line("info", f"$ {self._command}")
+        self._reader = threading.Thread(
+            target=self._pump,
+            daemon=True,
+            name=f"{self._backend}-install-pump",
+        )
         self._reader.start()
 
     def _pump(self) -> None:
@@ -172,7 +254,7 @@ class ClaudeInstallFlow(_BaseFlow):
             for raw in iter(proc.stdout.readline, ""):
                 if self._stopped.is_set():
                     break
-                line = raw.rstrip("\n")
+                line = _strip_ansi(raw.rstrip("\n"))
                 if line:
                     self._on_line("stdout", line)
         except Exception as exc:  # noqa: BLE001
@@ -186,6 +268,18 @@ class ClaudeInstallFlow(_BaseFlow):
                 self._on_complete(True, "")
             else:
                 self._on_complete(False, f"installer exited with code {rc}")
+
+
+# Back-compat shim: older imports still expect the old class name + signature.
+class ClaudeInstallFlow(CliInstallFlow):
+    """Back-compat shim: same behaviour as ``CliInstallFlow("claude-code", …)``."""
+
+    def __init__(
+        self,
+        on_line: LineCallback,
+        on_complete: Callable[[bool, str], None],
+    ) -> None:
+        super().__init__("claude-code", on_line=on_line, on_complete=on_complete)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -234,11 +328,14 @@ class ClaudeAuthFlow(_BaseFlow):
         self._url_event = threading.Event()
         self._auth_method = "claudeai"
 
-    def start(self, auth_method: str = "claudeai") -> None:
+    def start(self, auth_method: str = "claudeai", force: bool = False) -> None:
         """Spawn ``claude auth login`` and tail stdout for the OAuth URL.
 
         ``auth_method`` is ``"claudeai"`` (subscription, default) or
         ``"console"`` (API billing).
+
+        If ``force`` is true, run ``claude auth logout`` first so the CLI is
+        guaranteed to launch the OAuth flow (and the user can switch accounts).
         """
         if self.is_running:
             self._on_progress("info", "Auth flow already running")
@@ -260,6 +357,20 @@ class ClaudeAuthFlow(_BaseFlow):
         env = _env_with_claude_path(binary)
         env["DISPLAY"] = ""
         env["BROWSER"] = "true"
+
+        if force:
+            self._on_progress("info", "Logging out previous Claude session…")
+            try:
+                subprocess.run(
+                    [binary, "auth", "logout"],
+                    capture_output=True,
+                    text=True,
+                    timeout=8,
+                    env=env,
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Logout failure is not fatal — surface it but proceed to login.
+                self._on_progress("info", f"claude auth logout warning: {exc}")
 
         flag = "--console" if auth_method == "console" else "--claudeai"
         try:
@@ -288,7 +399,9 @@ class ClaudeAuthFlow(_BaseFlow):
             for raw in iter(proc.stdout.readline, ""):
                 if self._stopped.is_set():
                     break
-                line = raw.rstrip("\n")
+                # Strip ANSI styling before doing anything — both URL matching
+                # AND user-facing display benefit from cleaned text.
+                line = _strip_ansi(raw.rstrip("\n"))
                 if not line:
                     continue
                 self._stdout_buffer.append(line)
@@ -308,9 +421,7 @@ class ClaudeAuthFlow(_BaseFlow):
 
     @staticmethod
     def _extract_url(line: str) -> str:
-        """Pick the OAuth URL out of a single stdout line."""
-        # The CLI may emit ANSI styling; strip it before matching.
-        line = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line)
+        """Pick the OAuth URL out of a single stdout line (already ANSI-stripped)."""
         m = _OAUTH_URL_RE.search(line)
         if m:
             return m.group(1).rstrip(".,)")
@@ -385,15 +496,20 @@ class ClaudeAuthFlow(_BaseFlow):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-# `codex login --device-auth` prints something like::
+# Two stdout shapes we care about:
 #
-#   To sign in, open https://auth.openai.com/device and enter code: ABCD-EFGH
+#  Browser flow (``codex login``, default — uses the local 1455 callback):
+#    Starting local login server on http://localhost:1455.
+#    If your browser did not open, navigate to this URL to authenticate:
+#    https://auth.openai.com/oauth/authorize?…&originator=codex_cli_rs
 #
-# We grab both the URL and the user code so the panel can render them as a
-# proper button + copyable monospaced code instead of asking the user to
-# paste anything back into stdin.
-_CODEX_DEVICE_URL_RE = re.compile(
-    r"(https?://\S*(?:openai\.com|chatgpt\.com)\S*)",
+#  Device-code flow (``codex login --device-auth`` — for headless servers):
+#    To sign in, open https://auth.openai.com/device and enter code: ABCD-EFGH
+#
+# In both cases the URL we want is the one pointing at auth.openai.com /
+# chatgpt.com — never the http://localhost:1455 status line.
+_CODEX_AUTH_URL_RE = re.compile(
+    r"(https?://(?:auth\.openai\.com|chatgpt\.com|openai\.com)\S*)",
     re.IGNORECASE,
 )
 _CODEX_DEVICE_CODE_RE = re.compile(
@@ -403,19 +519,28 @@ _CODEX_DEVICE_CODE_RE = re.compile(
 
 
 class CodexAuthFlow(_BaseFlow):
-    """Drive ``codex login --device-auth`` over a WebSocket.
+    """Drive ``codex login`` over a WebSocket in one of two modes.
 
-    Lifecycle:
+    Lifecycle (``mode="browser"`` — default):
+      1. :meth:`start` spawns ``codex login`` (no flags).  Codex starts a
+         local OAuth callback server on http://localhost:1455 and prints the
+         authorize URL to stdout.
+      2. We capture the authorize URL and forward it via ``on_url``.  The
+         panel renders it as an "Open sign-in page" button.  The user signs
+         in in their browser; OpenAI redirects to localhost:1455 which the
+         spawned codex process is listening on.
+      3. ``codex login`` writes ``~/.codex/auth.json`` and exits 0.  We
+         re-probe with :func:`_probe_codex_auth` and fire ``on_complete``.
+
+    Lifecycle (``mode="device_code"`` — for headless servers):
       1. :meth:`start` spawns ``codex login --device-auth``.  Codex prints
-         a verification URL plus a short user code, then polls until the
-         user completes the device-flow approval in their browser.
-      2. A background reader thread tails stdout, extracts the URL and
-         code, and forwards both via ``on_url`` (URL) and ``on_progress``
-         (code).  The panel renders the URL as a button and the code as
-         a copy-to-clipboard chip.
-      3. Once the user approves in the browser, ``codex login`` writes
-         ``~/.codex/auth.json`` and exits 0.  We re-probe with
-         :func:`_probe_codex_auth` and fire ``on_complete``.
+         the URL plus a short user code, then polls auth.openai.com until
+         the device-flow approval succeeds.
+      2. The reader forwards URL + code (``on_url`` + ``on_progress`` with
+         ``level="code"``).  The panel shows both as copy-paste affordances.
+
+    Both modes accept a ``force=True`` start argument that runs
+    ``codex logout`` first so the user can switch ChatGPT accounts.
     """
 
     name = "codex-auth"
@@ -435,26 +560,61 @@ class CodexAuthFlow(_BaseFlow):
         self._code_seen = False
         self._stdout_buffer: list[str] = []
         self._url_event = threading.Event()
+        self._mode: str = "browser"
 
-    def start(self) -> None:
+    def start(self, mode: str = "browser", force: bool = False) -> None:
+        """Spawn the codex login subprocess.
+
+        Args:
+            mode: ``"browser"`` (default) drives ``codex login`` and lets the
+                user sign in through their browser via localhost:1455.
+                ``"device_code"`` drives ``codex login --device-auth`` for
+                headless servers.
+            force: When true, run ``codex logout`` first to clear cached
+                creds — useful for switching ChatGPT accounts.
+        """
         binary = shutil.which("codex") or ""
         if not binary:
             self._on_complete(
                 False,
-                "Codex CLI not on PATH. Install it (`brew install codex` "
-                "or `npm i -g @openai/codex`), then try Sign in again.",
+                "Codex CLI not on PATH. Install it from the Agents tab "
+                "(brew install codex / npm i -g @openai/codex).",
             )
             return
 
-        # Force the non-interactive device-code path even when a TTY exists.
-        # Without --device-auth, recent codex builds try to open a local
-        # browser via the OS default handler which silently no-ops on
-        # headless servers.
+        # `BROWSER=true` makes codex's "did the browser open?" stub no-op so
+        # the URL stays on stdout where we can scrape it.  DISPLAY=""
+        # prevents codex from trying xdg-open on Linux.
         env = {**os.environ, "DISPLAY": "", "BROWSER": "true"}
+
+        if force:
+            self._on_progress("info", "Logging out previous Codex session…")
+            try:
+                subprocess.run(
+                    [binary, "logout"],
+                    capture_output=True,
+                    text=True,
+                    timeout=8,
+                    env=env,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._on_progress("info", f"codex logout warning: {exc}")
+
+        # Build the argv list per mode.  We accept the strings the JS layer
+        # most plausibly sends; default to browser on anything unrecognised.
+        normalised = (mode or "browser").lower().replace("-", "_")
+        if normalised in ("device", "device_code", "devicecode"):
+            argv = [binary, "login", "--device-auth"]
+            self._mode = "device_code"
+            launch_msg = "Launching Codex device-code sign-in…"
+        else:
+            argv = [binary, "login"]
+            self._mode = "browser"
+            launch_msg = "Launching Codex browser sign-in…"
 
         try:
             self._proc = subprocess.Popen(
-                [binary, "login", "--device-auth"],
+                argv,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -467,7 +627,10 @@ class CodexAuthFlow(_BaseFlow):
             return
 
         self._started_at = time.time()
-        self._on_progress("info", "Launching Codex device sign-in…")
+        # Surface the chosen mode in the server log too, so "wrong URL in
+        # the panel?" can be diagnosed without strace.
+        log.info("codex login launched: argv=%s mode=%s force=%s", argv, self._mode, force)
+        self._on_progress("info", launch_msg)
         self._reader = threading.Thread(target=self._pump, daemon=True, name="codex-auth-pump")
         self._reader.start()
 
@@ -478,29 +641,28 @@ class CodexAuthFlow(_BaseFlow):
             for raw in iter(proc.stdout.readline, ""):
                 if self._stopped.is_set():
                     break
-                line = raw.rstrip("\n")
+                # Always strip ANSI before anything else — it prevents
+                # `[90m…[0m` junk from leaking into the browser status line.
+                line = _strip_ansi(raw.rstrip("\n"))
                 if not line:
                     continue
                 self._stdout_buffer.append(line)
                 self._on_progress("stdout", line)
 
-                # Strip ANSI styling before pattern-matching.
-                clean = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line)
-
                 if not self._url_seen:
-                    m = _CODEX_DEVICE_URL_RE.search(clean)
+                    m = _CODEX_AUTH_URL_RE.search(line)
                     if m:
                         url = m.group(1).rstrip(".,)")
                         self._url_seen = True
                         self._on_url(url)
                         self._url_event.set()
 
-                if not self._code_seen:
-                    m = _CODEX_DEVICE_CODE_RE.search(clean)
+                # Device-code mode also prints a short user code we surface
+                # as a copyable chip in the panel.  Browser mode never does.
+                if self._mode == "device_code" and not self._code_seen:
+                    m = _CODEX_DEVICE_CODE_RE.search(line)
                     if m:
                         self._code_seen = True
-                        # We piggyback on on_progress with a tagged level so
-                        # the panel can render the code distinctly.
                         self._on_progress("code", m.group(1).strip())
         except Exception as exc:  # noqa: BLE001
             self._on_progress("error", f"Reader error: {exc}")

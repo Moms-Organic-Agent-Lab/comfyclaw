@@ -1296,6 +1296,11 @@ function createSettingsModal() {
       else if (state === "unsupported") { badge = "Unavailable on this host"; badgeColor = "#585b70"; }
       else if (state === "error") { badge = "Probe error"; badgeColor = "#f38ba8"; }
 
+      // Which backends support in-panel sign-in / re-login.  LiteLLM has no
+      // CLI auth (it uses API keys), Gemini CLI doesn't expose a
+      // non-interactive auth flow we can drive.
+      const supportsAuth = id === "claude-code" || id === "codex";
+
       // Action buttons.
       const actions = [];
       if (state === "ok" && !isActive) {
@@ -1306,6 +1311,17 @@ function createSettingsModal() {
       } else if (state === "ok" && isActive) {
         actions.push(`<span style="font-size:11px; color:#a6e3a1; font-weight:600;
                                    align-self:center;">● Active</span>`);
+      }
+      // Re-login button when already connected — useful for switching ChatGPT
+      // / Claude accounts without having to drop to a terminal.  We omit it
+      // for backends that don't have a re-loginable concept (LiteLLM,
+      // Gemini CLI).
+      if (state === "ok" && supportsAuth) {
+        actions.push(`<button class="cc-agent-btn" data-action="relogin" data-be="${id}"
+                              style="background:transparent; color:#cdd6f4;
+                                     border:1px solid #45475a;">
+                        Re-login
+                      </button>`);
       }
       if (state === "needs_install" && st.can_install) {
         actions.push(`<button class="cc-agent-btn" data-action="install" data-be="${id}"
@@ -1399,6 +1415,10 @@ function createSettingsModal() {
           bridge.openInstall(id);
         } else if (action === "signin") {
           bridge.openSignIn(id);
+        } else if (action === "relogin") {
+          // Same flow as sign-in but the server runs `<binary> logout` first
+          // so the user can switch accounts.
+          bridge.openRelogin(id);
         } else if (action === "recheck") {
           // Ask the legacy picker to re-probe via WS, then refresh this tab
           // once availability is updated (the cc-backend-refresh event below).
@@ -2880,9 +2900,48 @@ function createComfyClawPanel() {
     });
   }
 
+  // Per-backend copy for the install modal.  The actual install command is
+  // pinned in setup_flows.py and never sent over the WS, so the JS doesn't
+  // need to know what's running — only how to explain it to the user.
+  const _INSTALL_COPY = {
+    "claude-code": {
+      title: "Install Claude Code",
+      subtitle: "Streaming installer output",
+      explainer:
+        "This runs the official Claude Code installer " +
+        "(<code>curl -fsSL https://claude.ai/install.sh | bash</code>). " +
+        "The script is bundled by Anthropic; no other command is executed.",
+    },
+    "codex": {
+      title: "Install Codex CLI",
+      subtitle: "Streaming installer output",
+      explainer:
+        "This installs the Codex CLI via Homebrew (<code>brew install codex</code>) " +
+        "on macOS, or npm (<code>npm install -g @openai/codex</code>) elsewhere. " +
+        "The exact command is logged below as it runs.",
+    },
+    "gemini-cli": {
+      title: "Install Gemini CLI",
+      subtitle: "Streaming installer output",
+      explainer:
+        "This installs the Gemini CLI via npm " +
+        "(<code>npm install -g @google/gemini-cli</code>). " +
+        "After install, run <code>gemini</code> once in a terminal to complete " +
+        "the Google OAuth prompt.",
+    },
+  };
+
   function _openClaudeInstallModal(backendId) {
-    if (backendId !== "claude-code") return;
+    if (!_INSTALL_COPY[backendId]) {
+      showToast(
+        `No installer wired up for ${backendId} yet.`,
+        "warning",
+        4000,
+      );
+      return;
+    }
     if (_installModal?.isOpen?.()) return;
+    const copy = _INSTALL_COPY[backendId];
 
     const logEl = document.createElement("pre");
     logEl.style.cssText = `
@@ -2898,10 +2957,7 @@ function createComfyClawPanel() {
 
     const explainer = document.createElement("div");
     explainer.style.cssText = "font-size:11px;color:var(--cc-fg-muted);margin-bottom:8px;line-height:1.5;";
-    explainer.innerHTML = `
-      This will install the Claude Code CLI by running the official installer.
-      The installer is bundled by Anthropic; no other command will be executed.
-    `;
+    explainer.innerHTML = copy.explainer;
 
     const container = document.createElement("div");
     container.appendChild(explainer);
@@ -2909,8 +2965,8 @@ function createComfyClawPanel() {
     container.appendChild(statusEl);
 
     _installModal = openModal({
-      title: "Install Claude Code",
-      subtitle: "Streaming installer output",
+      title: copy.title,
+      subtitle: copy.subtitle,
       body: container,
       width: 640,
       onClose: () => {
@@ -2943,21 +2999,36 @@ function createComfyClawPanel() {
     }
   }
 
-  // Route the "Sign in" popover action to the right backend-specific modal.
-  function _openSignInModal(backendId) {
-    if (backendId === "claude-code") return _openClaudeAuthModal(backendId);
-    if (backendId === "codex")        return _openCodexAuthModal(backendId);
+  // Route the "Sign in" / "Re-login" popover action to the right
+  // backend-specific modal.  ``opts.force`` triggers a logout-then-login
+  // re-flow so the user can switch accounts without dropping to a shell.
+  // ``opts.mode`` (codex only) picks "browser" (default) or "device_code".
+  function _openSignInModal(backendId, opts = {}) {
+    if (backendId === "claude-code") return _openClaudeAuthModal(backendId, opts);
+    if (backendId === "codex")        return _openCodexAuthModal(backendId, opts);
+    if (backendId === "gemini-cli") {
+      // Gemini CLI doesn't expose a non-interactive auth flow we can drive
+      // from outside its TUI, so point the user at the install button +
+      // running `gemini` once.
+      showToast(
+        "Run `gemini` once in a terminal to complete the Google OAuth prompt. " +
+        "Credentials get cached to ~/.gemini/oauth_creds.json.",
+        "info",
+        7000,
+      );
+      return;
+    }
     showToast(
-      `No in-panel sign-in for ${backendId} yet. ` +
-      `Run the matching CLI command in a terminal (see the chip tooltip).`,
+      `No in-panel sign-in for ${backendId} yet.`,
       "warning",
-      5000,
+      4000,
     );
   }
 
-  function _openClaudeAuthModal(backendId) {
+  function _openClaudeAuthModal(backendId, opts = {}) {
     if (backendId !== "claude-code") return;
     if (_authModal?.isOpen?.()) return;
+    const force = !!opts.force;
 
     const stepEl = document.createElement("div");
     stepEl.style.cssText = "font-size:12px;line-height:1.6;color:var(--cc-fg);";
@@ -3113,34 +3184,54 @@ function createComfyClawPanel() {
     };
 
     _authModal._showWaiting();
-    if (!_wsSend({ type: "backend_auth_start", backend: backendId, auth_method: "claudeai" })) {
+    if (!_wsSend({
+      type: "backend_auth_start",
+      backend: backendId,
+      auth_method: "claudeai",
+      force,
+    })) {
       _authModal._setStatus("Sync server is not connected.", "error");
       _authModal._inFlight = false;
     }
   }
 
-  // Codex sign-in uses the OAuth **device-code** flow (no paste-back needed):
-  // the CLI prints a URL + short user code, and polls until the user approves
-  // it in the browser.  We render the URL as a button and the code as a big
-  // copyable chip — and `backend_auth_complete` lands automatically once the
-  // user finishes in the browser.
-  function _openCodexAuthModal(backendId) {
+  // Codex sign-in has two modes:
+  //   "browser"     (default) — `codex login` starts a local HTTP server on
+  //                  localhost:1455, prints a URL, waits for OAuth callback.
+  //                  Best for local installs (mirrors the standard CLI UX
+  //                  shown when you run `codex` interactively).
+  //   "device_code" — `codex login --device-auth` prints URL + short code,
+  //                   polls auth.openai.com.  Best for headless servers or
+  //                   anywhere the user's browser can't reach localhost:1455.
+  function _openCodexAuthModal(backendId, opts = {}) {
     if (backendId !== "codex") return;
     if (_authModal?.isOpen?.()) return;
+
+    let mode = (opts.mode === "device_code") ? "device_code" : "browser";
+    const force = !!opts.force;
 
     const stepEl = document.createElement("div");
     stepEl.style.cssText = "font-size:12px;line-height:1.6;color:var(--cc-fg);";
     const statusEl = document.createElement("div");
     statusEl.style.cssText = "font-size:11px;color:var(--cc-fg-muted);margin-top:14px;";
-    statusEl.textContent = "Asking Codex for a device-code link…";
+
+    // Mode-switcher footer link — lets the user flip to the other flow
+    // without having to close + reopen the modal from the Settings tab.
+    const switchEl = document.createElement("div");
+    switchEl.style.cssText =
+      "font-size:11px;color:var(--cc-fg-muted);margin-top:14px;" +
+      "padding-top:10px;border-top:1px solid var(--cc-border);";
 
     const container = document.createElement("div");
     container.appendChild(stepEl);
     container.appendChild(statusEl);
+    container.appendChild(switchEl);
 
     _authModal = openModal({
       title: "Sign in to Codex (ChatGPT)",
-      subtitle: "Device-code OAuth (no paste-back, no API key)",
+      subtitle: mode === "device_code"
+        ? "Device-code OAuth — for headless servers"
+        : "Browser OAuth — no API key, no terminal",
       body: container,
       width: 560,
       onClose: () => {
@@ -3155,6 +3246,31 @@ function createComfyClawPanel() {
     _authModal._codexUrl = "";
     _authModal._codexCode = "";
 
+    const _renderSwitcher = () => {
+      const other = mode === "device_code" ? "browser" : "device_code";
+      const otherLabel = other === "browser"
+        ? "browser sign-in (localhost:1455 callback)"
+        : "device-code sign-in (for remote/headless)";
+      switchEl.innerHTML = `
+        On a different setup? Switch to
+        <a href="#" class="cc-codex-switch-mode"
+           style="color:var(--cc-accent, #4af);text-decoration:none;
+                  border-bottom:1px dotted currentColor;">
+          ${escHtml(otherLabel)}
+        </a>.
+      `;
+      switchEl.querySelector(".cc-codex-switch-mode")?.addEventListener("click", (e) => {
+        e.preventDefault();
+        // Re-spawn the auth flow in the other mode.
+        _wsSend({ type: "backend_auth_cancel", backend: backendId });
+        _authModal?.close?.();
+        setTimeout(
+          () => _openCodexAuthModal(backendId, { mode: other, force }),
+          150,
+        );
+      });
+    };
+
     const _render = () => {
       const url  = _authModal._codexUrl;
       const code = _authModal._codexCode;
@@ -3165,11 +3281,84 @@ function createComfyClawPanel() {
               width:14px;height:14px;border:2px solid var(--cc-border);
               border-top-color:var(--cc-accent);border-radius:50%;
               animation:cc-spin 0.8s linear infinite;"></span>
-            <span>Waiting for Codex to print the device-code link…</span>
+            <span>${mode === "device_code"
+              ? "Waiting for Codex to print the device-code link…"
+              : "Asking Codex for a sign-in link…"}</span>
           </div>
         `;
         return;
       }
+
+      // Browser mode — one button, no code needed.
+      if (mode === "browser") {
+        stepEl.innerHTML = `
+          <div style="margin-bottom:14px;">
+            <strong>Finish signing in via your browser</strong>
+            <div style="font-size:11px;color:var(--cc-fg-muted);margin-top:4px;
+                        line-height:1.5;">
+              Click the button below to open the OpenAI sign-in page. After you
+              authorize Codex, this dialog finishes automatically — Codex's
+              local callback server on <code>localhost:1455</code> catches the
+              redirect and writes <code>~/.codex/auth.json</code>.
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+            <a class="cc-auth-open-link" href="${url}" target="_blank" rel="noopener"
+               style="background:var(--cc-accent);color:var(--cc-bg);padding:8px 14px;
+                      border-radius:8px;text-decoration:none;font-weight:600;
+                      font-size:12px;display:inline-flex;align-items:center;gap:6px;">
+              Open OpenAI sign-in &rarr;
+            </a>
+            <button class="cc-auth-copy-link" style="background:transparent;
+                    border:1px solid var(--cc-border);color:var(--cc-fg);
+                    padding:8px 14px;border-radius:8px;font-size:12px;cursor:pointer;">
+              Copy URL
+            </button>
+          </div>
+          <!-- Common-pitfall tip: device-code is the right fix when browser
+               flow times out, which happens whenever the user's browser
+               can't reach the server's localhost:1455 (remote SSH setups)
+               or Google 2FA pushes them past the OAuth state TTL. -->
+          <div style="margin-top:6px; padding:8px 10px;
+                      background:var(--cc-surface-tint, rgba(255,255,255,0.04));
+                      border:1px solid var(--cc-border);
+                      border-left:3px solid var(--cc-accent, #4af);
+                      border-radius:6px;
+                      font-size:11px; color:var(--cc-fg-muted); line-height:1.5;">
+            <strong style="color:var(--cc-fg);">Seeing "Operation timed out"?</strong>
+            Browser sign-in needs your browser to reach
+            <code>localhost:1455</code> on <em>this server</em>. If you're on
+            a remote SSH / headless setup, or Google 2FA pushed you past
+            OpenAI's 5-minute OAuth window, use
+            <a href="#" class="cc-codex-use-device"
+               style="color:var(--cc-accent, #4af);text-decoration:none;
+                      border-bottom:1px dotted currentColor;">
+              device-code sign-in
+            </a>
+            instead — it works regardless of where your browser is.
+          </div>
+        `;
+        stepEl.querySelector(".cc-auth-copy-link")?.addEventListener("click", () => {
+          navigator.clipboard?.writeText(url).then(
+            () => showToast("URL copied", "success", 1500),
+            () => showToast("Could not access clipboard", "error", 2000),
+          );
+        });
+        // Inline shortcut to device-code mode without scrolling to the
+        // footer — same behaviour as the bottom "Switch to…" link.
+        stepEl.querySelector(".cc-codex-use-device")?.addEventListener("click", (e) => {
+          e.preventDefault();
+          _wsSend({ type: "backend_auth_cancel", backend: backendId });
+          _authModal?.close?.();
+          setTimeout(
+            () => _openCodexAuthModal(backendId, { mode: "device_code", force }),
+            150,
+          );
+        });
+        return;
+      }
+
+      // Device-code mode — URL + 8-char code chip.
       stepEl.innerHTML = `
         <div style="margin-bottom:14px;">
           <strong>Step 1 — Open the link</strong>
@@ -3241,7 +3430,12 @@ function createComfyClawPanel() {
     _authModal._showSignInLink = (url) => {
       _authModal._codexUrl = url;
       _render();
-      _authModal._setStatus("Waiting for you to approve in the browser…", "info");
+      _authModal._setStatus(
+        mode === "device_code"
+          ? "Waiting for you to enter the code & approve in the browser…"
+          : "Waiting for you to sign in & authorize Codex in the browser…",
+        "info",
+      );
     };
     _authModal._showDeviceCode = (code) => {
       _authModal._codexCode = code;
@@ -3266,6 +3460,7 @@ function createComfyClawPanel() {
           </div>
         </div>
       `;
+      switchEl.style.display = "none";
       _authModal._setStatus("You can close this and start generating.", "ok");
     };
     _authModal._showFailure = (detail) => {
@@ -3278,23 +3473,48 @@ function createComfyClawPanel() {
                         line-height:1.5;word-break:break-word;">
               ${escHtml(detail || "")}
             </div>
-            <button class="cc-auth-retry"
-                    style="margin-top:10px;background:var(--cc-accent);color:var(--cc-bg);
-                           border:none;border-radius:6px;padding:6px 14px;font-size:12px;
-                           font-weight:600;cursor:pointer;">
-              Try again
-            </button>
+            <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">
+              <button class="cc-auth-retry"
+                      style="background:var(--cc-accent);color:var(--cc-bg);
+                             border:none;border-radius:6px;padding:6px 14px;font-size:12px;
+                             font-weight:600;cursor:pointer;">
+                Try again
+              </button>
+              <button class="cc-auth-try-other"
+                      style="background:transparent;border:1px solid var(--cc-border);
+                             color:var(--cc-fg);border-radius:6px;padding:6px 14px;
+                             font-size:12px;cursor:pointer;">
+                Try ${mode === "device_code" ? "browser" : "device code"} instead
+              </button>
+            </div>
           </div>
         </div>
       `;
       stepEl.querySelector(".cc-auth-retry")?.addEventListener("click", () => {
         _authModal?.close?.();
-        setTimeout(() => _openCodexAuthModal(backendId), 150);
+        setTimeout(() => _openCodexAuthModal(backendId, { mode, force }), 150);
+      });
+      stepEl.querySelector(".cc-auth-try-other")?.addEventListener("click", () => {
+        _authModal?.close?.();
+        const other = mode === "device_code" ? "browser" : "device_code";
+        setTimeout(() => _openCodexAuthModal(backendId, { mode: other, force }), 150);
       });
     };
 
     _render();
-    if (!_wsSend({ type: "backend_auth_start", backend: backendId })) {
+    _renderSwitcher();
+    _authModal._setStatus(
+      mode === "device_code"
+        ? "Asking Codex for a device-code link…"
+        : "Starting browser sign-in…",
+      "info",
+    );
+    if (!_wsSend({
+      type: "backend_auth_start",
+      backend: backendId,
+      auth_method: mode,
+      force,
+    })) {
       _authModal._setStatus("Sync server is not connected.", "error");
       _authModal._inFlight = false;
     }
@@ -3340,7 +3560,10 @@ function createComfyClawPanel() {
       _refreshBackendChip();
     },
     openInstall: (id) => _openClaudeInstallModal(id),
-    openSignIn:  (id) => _openSignInModal(id),
+    openSignIn:  (id, opts) => _openSignInModal(id, opts),
+    /** Re-login: same modal flow as Sign in but the server runs
+     *  `<binary> logout` first to clear cached creds. */
+    openRelogin: (id) => _openSignInModal(id, { force: true }),
   };
 
   // ── Composer Run button (uses chat input as generation prompt) ─────────────
@@ -4147,7 +4370,12 @@ class SyncClient {
       if (_installModal?.isOpen?.()) {
         _installModal._inFlight = false;
         if (msg.success) {
-          _installModal._setStatus("✓ Installed. You can now sign in.", "ok");
+          // Gemini doesn't have an in-panel auth flow, so the post-install
+          // step is "run `gemini` once in a terminal", not "click Sign in".
+          const okMsg = msg.backend === "gemini-cli"
+            ? "✓ Installed. Run `gemini` once in a terminal to sign in with Google."
+            : "✓ Installed. You can now sign in.";
+          _installModal._setStatus(okMsg, "ok");
           _installModal._appendLine?.("info", "[install] Complete.");
         } else {
           _installModal._setStatus(`✕ Install failed: ${msg.error || msg.detail || "unknown error"}`, "error");
