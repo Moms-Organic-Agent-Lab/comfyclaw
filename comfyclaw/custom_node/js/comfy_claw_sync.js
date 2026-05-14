@@ -1186,6 +1186,12 @@ function createSettingsModal() {
     <!-- Tab bar -->
     <div style="display:flex; gap:0; padding:0 20px; flex-shrink:0;
                 border-bottom:1px solid #313244; background:#1e1e2e;">
+      <button class="cc-stab" data-tab="agents"
+              style="padding:10px 16px; border:none; background:transparent;
+                     cursor:pointer; font-size:12px; font-weight:600;
+                     border-bottom:2px solid transparent; transition:all 0.15s;">
+        🤖 Agents
+      </button>
       <button class="cc-stab" data-tab="providers"
               style="padding:10px 16px; border:none; background:transparent;
                      cursor:pointer; font-size:12px; font-weight:600;
@@ -1244,7 +1250,8 @@ function createSettingsModal() {
       b.style.background    = "transparent";
     });
     const content = box.querySelector("#cc-stg-content");
-    if (tab === "providers")   _renderProvidersTab(content);
+    if (tab === "agents")          _renderAgentsTab(content);
+    else if (tab === "providers")  _renderProvidersTab(content);
     else if (tab === "connection") _renderConnectionTab(content);
     else if (tab === "appearance") _renderAppearanceTab(content);
     else                           _renderDefaultsTab(content);
@@ -1254,6 +1261,155 @@ function createSettingsModal() {
   box.querySelector("#cc-stg-close").addEventListener("click", () => { overlay.style.display = "none"; });
   box.querySelector("#cc-stg-done").addEventListener("click", () => { overlay.style.display = "none"; });
   overlay.addEventListener("click", e => { if (e.target === overlay) overlay.style.display = "none"; });
+
+  // ── Agents tab ───────────────────────────────────────────────────────────────
+  // Lists the four agent backends (LiteLLM / Claude Code / Codex / Gemini CLI)
+  // with their installation + sign-in state, plus per-backend Install /
+  // Sign-in / Re-check buttons.  The dropdown next to the composer textarea
+  // is intentionally read-only for these affordances — this is where the user
+  // manages them.
+  function _renderAgentsTab(container) {
+    const bridge = _agentBridge;
+    if (!bridge) {
+      container.innerHTML = `
+        <div style="padding:14px; background:#313244; border-radius:10px;
+                    color:#a6adc8; font-size:12px; line-height:1.6;">
+          Agent backends are still loading. Close Settings and reopen this tab
+          in a moment.
+        </div>`;
+      return;
+    }
+
+    const curId = bridge.activeId();
+    const items = Object.entries(bridge.BACKEND_META).map(([id, meta]) => {
+      const st       = bridge.statusOf(id) || { state: "ok", detail: "" };
+      const state    = st.state || "ok";
+      const isActive = id === curId;
+
+      // Connection summary.
+      const connected = state === "ok";
+      const dotColor  = connected ? "#a6e3a1" : "#585b70";
+      let badge       = "Connected";
+      let badgeColor  = "#a6e3a1";
+      if (state === "needs_install") { badge = "Not installed"; badgeColor = "#f38ba8"; }
+      else if (state === "needs_auth") { badge = "Not signed in"; badgeColor = "#f9e2af"; }
+      else if (state === "unsupported") { badge = "Unavailable on this host"; badgeColor = "#585b70"; }
+      else if (state === "error") { badge = "Probe error"; badgeColor = "#f38ba8"; }
+
+      // Action buttons.
+      const actions = [];
+      if (state === "ok" && !isActive) {
+        actions.push(`<button class="cc-agent-btn" data-action="activate" data-be="${id}"
+                              style="background:#cba6f7; color:#1e1e2e; font-weight:700;">
+                        Use this backend
+                      </button>`);
+      } else if (state === "ok" && isActive) {
+        actions.push(`<span style="font-size:11px; color:#a6e3a1; font-weight:600;
+                                   align-self:center;">● Active</span>`);
+      }
+      if (state === "needs_install" && st.can_install) {
+        actions.push(`<button class="cc-agent-btn" data-action="install" data-be="${id}"
+                              style="background:#f9e2af; color:#1e1e2e; font-weight:700;">
+                        Install
+                      </button>`);
+      }
+      if (state === "needs_auth") {
+        actions.push(`<button class="cc-agent-btn" data-action="signin" data-be="${id}"
+                              style="background:#f9e2af; color:#1e1e2e; font-weight:700;">
+                        Sign in
+                      </button>`);
+      }
+      // Always offer a re-probe so the user can verify after running a CLI
+      // command externally (e.g. `claude /login` in a terminal).
+      actions.push(`<button class="cc-agent-btn" data-action="recheck" data-be="${id}"
+                            style="background:#313244; color:#cdd6f4; border:1px solid #45475a;">
+                      Re-check
+                    </button>`);
+
+      const detail = st.detail
+        ? `<div style="font-size:11px; color:#7f849c; margin-top:4px; line-height:1.5;">
+             ${escHtml(st.detail)}
+           </div>`
+        : "";
+
+      const hint = state === "needs_install"
+        ? "Install the CLI to use it as an agent backend (no API key needed once signed in)."
+        : state === "needs_auth"
+          ? "Sign in via your subscription to skip API keys entirely."
+          : state === "unsupported"
+            ? "This backend isn't available on the current server platform."
+            : state === "ok" && !meta.needsApiKey
+              ? "Uses your CLI's local credentials — no API key required."
+              : state === "ok" && meta.needsApiKey
+                ? "Uses provider API keys (configure them in the Providers tab)."
+                : "";
+
+      return `
+        <div class="cc-agent-card" data-be="${id}"
+             style="background:#313244; border-radius:12px; padding:14px 16px;
+                    margin-bottom:12px; border:1px solid ${isActive ? "#cba6f7" : "transparent"};">
+          <div style="display:flex; align-items:center; gap:12px; margin-bottom:6px;">
+            ${bridge.logoHtml(meta, 26)}
+            <div style="flex:1; min-width:0;">
+              <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                <span style="font-weight:700; font-size:13px;">${escHtml(meta.label)}</span>
+                <span style="display:inline-flex; align-items:center; gap:5px;
+                             font-size:11px; color:${badgeColor}; font-weight:600;">
+                  <span style="width:7px; height:7px; border-radius:50%;
+                               background:${dotColor};
+                               box-shadow:0 0 0 1px rgba(0,0,0,0.15) inset;"></span>
+                  ${escHtml(badge)}
+                </span>
+              </div>
+              ${hint ? `<div style="font-size:11px; color:#a6adc8; margin-top:3px; line-height:1.5;">${escHtml(hint)}</div>` : ""}
+              ${detail}
+            </div>
+          </div>
+          <div style="display:flex; gap:6px; justify-content:flex-end; flex-wrap:wrap;
+                      margin-top:8px;">
+            ${actions.join("")}
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    container.innerHTML = `
+      <div style="font-size:11px; color:#a6adc8; line-height:1.6; margin-bottom:12px;">
+        ComfyClaw can drive any of these agent backends. CLI backends
+        (Claude Code, Codex, Gemini CLI) reuse credentials cached by their
+        binaries — your paid subscription is enough, no API key required.
+        LiteLLM is the API-key fallback.
+      </div>
+      ${items}
+    `;
+
+    // Apply shared button styling that's awkward to inline-repeat.
+    container.querySelectorAll(".cc-agent-btn").forEach((btn) => {
+      btn.style.cssText += `
+        padding:6px 14px; border:none; border-radius:7px;
+        cursor:pointer; font-size:11px;`;
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const id     = btn.dataset.be;
+        const action = btn.dataset.action;
+        if (action === "activate") {
+          bridge.setActive(id);
+          _renderAgentsTab(container);
+        } else if (action === "install") {
+          bridge.openInstall(id);
+        } else if (action === "signin") {
+          bridge.openSignIn(id);
+        } else if (action === "recheck") {
+          // Ask the legacy picker to re-probe via WS, then refresh this tab
+          // once availability is updated (the cc-backend-refresh event below).
+          try {
+            window.dispatchEvent(new CustomEvent("comfyclaw:reprobe-backends"));
+          } catch (_) { /* ignore */ }
+          showToast("Re-probing backends…", "info", 1500);
+        }
+      });
+    });
+  }
 
   // ── Providers tab ────────────────────────────────────────────────────────────
   function _renderProvidersTab(container) {
@@ -1470,16 +1626,28 @@ function createSettingsModal() {
   }
 
   // Public
-  overlay.openTo = (tab = "providers") => {
+  overlay.openTo = (tab = "agents") => {
     overlay.style.display = "flex";
     _activateTab(tab);
   };
+  // Called from outside when WS-driven backend availability changes; keeps the
+  // Agents tab in sync without forcing the user to switch tabs to refresh.
+  overlay.refreshAgentsIfOpen = () => {
+    if (overlay.style.display === "none") return;
+    if (_activeSettingsTab !== "agents") return;
+    const content = box.querySelector("#cc-stg-content");
+    if (content) _renderAgentsTab(content);
+  };
 
-  _activateTab("providers");
+  _activateTab("agents");
   return overlay;
 }
 
 let _settingsModal = null;
+// Bridge between the panel-scope agent UI (BACKEND_META, install/sign-in
+// flows, activeId, …) and the module-scope Settings modal's "Agents" tab.
+// Populated when mountClawPanel() runs.
+let _agentBridge = null;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Connection dot helpers
@@ -2549,12 +2717,28 @@ function createComfyClawPanel() {
   const beChipLabel = beChip?.querySelector(".cc-chip-label");
   const beChipIcon  = beChip?.querySelector(".cc-chip-icon");
 
+  // Brand-coloured rounded square logos with a single letter glyph.  We use
+  // text marks instead of bundled SVGs to (a) avoid copyright concerns and
+  // (b) stay self-contained — the picker reads only from this map and the
+  // `_backendLogoHtml` helper below.
   const BACKEND_META = {
-    "litellm":     { label: "LiteLLM",     icon: "⚙", needsApiKey: true  },
-    "claude-code": { label: "Claude Code", icon: "◆", needsApiKey: false },
-    "codex":       { label: "Codex",       icon: "◇", needsApiKey: false },
-    "gemini-cli":  { label: "Gemini CLI",  icon: "✦", needsApiKey: false },
+    "litellm":     { label: "LiteLLM",     letter: "L", brand: "#7287fd", needsApiKey: true  },
+    "claude-code": { label: "Claude Code", letter: "C", brand: "#cc785c", needsApiKey: false },
+    "codex":       { label: "Codex",       letter: "O", brand: "#10a37f", needsApiKey: false },
+    "gemini-cli":  { label: "Gemini CLI",  letter: "G", brand: "#4285f4", needsApiKey: false },
   };
+
+  /** Render the brand-coloured logo chip for a backend. */
+  function _backendLogoHtml(meta, size = 16) {
+    if (!meta) return "";
+    return `<span style="display:inline-flex; align-items:center; justify-content:center;
+                  width:${size}px; height:${size}px; border-radius:4px;
+                  background:${meta.brand}; color:#fff;
+                  font-weight:700; font-size:${Math.max(9, Math.round(size * 0.62))}px;
+                  font-family:system-ui,-apple-system,sans-serif;
+                  line-height:1; flex-shrink:0;
+                  text-shadow:0 1px 0 rgba(0,0,0,0.25);">${escHtml(meta.letter)}</span>`;
+  }
   function _activeBackendId() {
     return _backendPickerRef?.value() || localStorage.getItem("comfyclaw_agent_backend") || "litellm";
   }
@@ -2563,7 +2747,12 @@ function createComfyClawPanel() {
     const id   = _activeBackendId();
     const meta = BACKEND_META[id] || BACKEND_META["litellm"];
     if (beChipLabel) beChipLabel.textContent = meta.label;
-    if (beChipIcon)  beChipIcon.textContent  = meta.icon;
+    // Replace the unicode placeholder with the backend's brand logo so the
+    // chip itself becomes self-explanatory at a glance.
+    if (beChipIcon) {
+      beChipIcon.style.cssText = "";  // wipe any previous letter-glyph font sizing
+      beChipIcon.innerHTML = _backendLogoHtml(meta, 14);
+    }
     // CLI backends manage their own model — visually de-emphasize the model
     // chip so the user isn't confused into thinking it controls them.
     const modelChipEl = panel.querySelector("#cc-composer-model-chip");
@@ -2574,21 +2763,23 @@ function createComfyClawPanel() {
 
   let _bePopover = null;
 
-  // Color-coded mini-dot for the popover rows; mirrors the picker's logic.
-  function _stateDot(state) {
-    let color = "var(--cc-fg-faint)";
-    if (state === "ok") color = "var(--cc-accent-green)";
-    else if (state === "needs_auth") color = "var(--cc-accent, #f0a500)";
-    else if (state === "needs_install" || state === "error") color = "var(--cc-accent-red)";
-    return `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;
-                          background:${color};margin-right:6px;"></span>`;
+  // Binary connection dot — solid green when this backend can be used right
+  // now, grey otherwise.  Install / Sign-in actions live in Settings → Agents
+  // instead of being shown inline here, so the dropdown reads as a clean
+  // "pick a connected provider" picker.
+  function _connectedDot(connected) {
+    const color = connected ? "var(--cc-accent-green)" : "var(--cc-fg-faint)";
+    return `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;
+                          background:${color};flex-shrink:0;
+                          box-shadow:0 0 0 1px rgba(0,0,0,0.15) inset;"></span>`;
   }
 
-  function _stateLabel(state) {
-    if (state === "needs_install") return "Not installed";
-    if (state === "needs_auth")    return "Not signed in";
-    if (state === "unsupported")   return "Unavailable";
-    if (state === "error")         return "Error";
+  function _connectedHint(state) {
+    if (state === "ok")            return "Connected";
+    if (state === "needs_install") return "Not installed — open Settings → Agents";
+    if (state === "needs_auth")    return "Not signed in — open Settings → Agents";
+    if (state === "unsupported")   return "Unavailable on this host";
+    if (state === "error")         return "Probe error";
     return "";
   }
 
@@ -2610,45 +2801,48 @@ function createComfyClawPanel() {
       const active = id === curId;
       const st = _backendPickerRef?.status?.(id) || null;
       const state = st?.state || "ok";
-      const detail = st?.detail || meta.label;
-      const isUsable = state === "ok";
-      const subLabel = _stateLabel(state);
+      const connected = state === "ok";
+      const hint = _connectedHint(state);
 
-      let actionBtn = "";
-      if (state === "needs_install" && st?.can_install) {
-        actionBtn = `<button class="cc-popover-action" data-action="install" data-be="${id}"
-                              style="margin-left:auto;font-size:10px;padding:2px 8px;
-                                     background:var(--cc-accent);color:var(--cc-bg);
-                                     border:none;border-radius:6px;cursor:pointer;">
-                       Install
-                     </button>`;
-      } else if (state === "needs_auth") {
-        actionBtn = `<button class="cc-popover-action" data-action="signin" data-be="${id}"
-                              style="margin-left:auto;font-size:10px;padding:2px 8px;
-                                     background:var(--cc-accent);color:var(--cc-bg);
-                                     border:none;border-radius:6px;cursor:pointer;">
-                       Sign in
-                     </button>`;
-      }
-
-      const subline = subLabel
-        ? `<div style="font-size:10px;color:var(--cc-fg-muted);margin-top:1px;">
-             ${_stateDot(state)}${subLabel}
+      const subline = hint
+        ? `<div style="font-size:10px;color:var(--cc-fg-muted);margin-top:1px;
+                       display:flex;align-items:center;gap:5px;">
+             ${_connectedDot(connected)}
+             <span>${escHtml(hint)}</span>
            </div>`
         : "";
 
-      html += `<div class="cc-popover-item${isUsable ? "" : " cc-popover-item-locked"}"
+      // Lock rows that aren't connected — they should not be selectable.
+      // The dropdown is a "pick a provider" picker, not a sign-in surface.
+      html += `<div class="cc-popover-item${connected ? "" : " cc-popover-item-locked"}"
                     data-be="${id}"${active ? ' data-active="1"' : ""}
-                    title="${detail.replace(/"/g, "&quot;")}"
-                    style="display:flex;align-items:center;gap:8px;padding:6px 10px;">
-                 <span class="cc-popover-icon">${active ? "✓" : meta.icon}</span>
+                    title="${escHtml((st?.detail || meta.label) + (connected ? "" : " — manage in Settings → Agents"))}"
+                    style="display:flex;align-items:center;gap:10px;padding:8px 10px;
+                           ${connected ? "cursor:pointer;" : "cursor:not-allowed;opacity:0.55;"}">
+                 ${_backendLogoHtml(meta, 20)}
                  <span style="flex:1;min-width:0;">
-                   <div>${meta.label}</div>
+                   <div style="display:flex;align-items:center;gap:6px;">
+                     <span style="font-weight:${active ? "700" : "500"};">${escHtml(meta.label)}</span>
+                     ${active ? '<span style="color:var(--cc-accent-green);font-size:11px;">✓</span>' : ""}
+                   </div>
                    ${subline}
                  </span>
-                 ${actionBtn}
                </div>`;
     }
+    // Footer pointing the user at Settings → Agents for install / sign-in.
+    html += `<div style="border-top:1px solid var(--cc-border);
+                         padding:8px 12px 6px;
+                         font-size:10px;color:var(--cc-fg-muted);
+                         display:flex;align-items:center;gap:6px;">
+               <span>⚙</span>
+               <span>Manage sign-ins in
+                 <a href="#" data-action="open-agents-settings"
+                    style="color:var(--cc-accent, #4af);text-decoration:none;
+                           border-bottom:1px dotted currentColor;">
+                   Settings → Agents
+                 </a>
+               </span>
+             </div>`;
     _bePopover.innerHTML = html;
     const r = beChip.getBoundingClientRect();
     _bePopover.style.left = `${Math.max(8, r.left)}px`;
@@ -2656,18 +2850,14 @@ function createComfyClawPanel() {
     _bePopover.style.transform = "translateY(-100%)";
     _bePopover.dataset.open = "1";
 
-    // Action buttons (Install / Sign in) take priority and stopPropagation
-    // so they don't also trigger the row's select-this-backend click.
-    _bePopover.querySelectorAll(".cc-popover-action").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const id = btn.dataset.be;
-        const action = btn.dataset.action;
+    // Footer link → opens Settings modal directly on the Agents tab.
+    _bePopover.querySelector('[data-action="open-agents-settings"]')
+      ?.addEventListener("click", (e) => {
+        e.preventDefault();
         _bePopover.dataset.open = "0";
-        if (action === "install") _openClaudeInstallModal(id);
-        else if (action === "signin") _openClaudeAuthModal(id);
+        if (!_settingsModal) _settingsModal = createSettingsModal();
+        _settingsModal.openTo("agents");
       });
-    });
 
     _bePopover.querySelectorAll(".cc-popover-item").forEach((item) => {
       item.addEventListener("click", (e) => {
@@ -2675,16 +2865,11 @@ function createComfyClawPanel() {
         const id = item.dataset.be;
         const st = _backendPickerRef?.status?.(id) || null;
         if (st && st.state && st.state !== "ok") {
-          // Don't activate an unusable backend; surface a hint instead.
-          showToast(
-            st.state === "needs_install"
-              ? "Install Claude Code first."
-              : st.state === "needs_auth"
-                ? "Sign in to Claude Code first."
-                : "This backend is unavailable.",
-            "warning",
-            2200,
-          );
+          // Don't activate an unusable backend; bounce the user into
+          // Settings → Agents where they can install / sign in.
+          _bePopover.dataset.open = "0";
+          if (!_settingsModal) _settingsModal = createSettingsModal();
+          _settingsModal.openTo("agents");
           return;
         }
         if (_backendPickerRef?.set) _backendPickerRef.set(id);
@@ -2756,6 +2941,18 @@ function createComfyClawPanel() {
       _installModal._setStatus("Sync server is not connected.", "error");
       _installModal._inFlight = false;
     }
+  }
+
+  // Route the "Sign in" popover action to the right backend-specific modal.
+  function _openSignInModal(backendId) {
+    if (backendId === "claude-code") return _openClaudeAuthModal(backendId);
+    if (backendId === "codex")        return _openCodexAuthModal(backendId);
+    showToast(
+      `No in-panel sign-in for ${backendId} yet. ` +
+      `Run the matching CLI command in a terminal (see the chip tooltip).`,
+      "warning",
+      5000,
+    );
   }
 
   function _openClaudeAuthModal(backendId) {
@@ -2922,13 +3119,194 @@ function createComfyClawPanel() {
     }
   }
 
+  // Codex sign-in uses the OAuth **device-code** flow (no paste-back needed):
+  // the CLI prints a URL + short user code, and polls until the user approves
+  // it in the browser.  We render the URL as a button and the code as a big
+  // copyable chip — and `backend_auth_complete` lands automatically once the
+  // user finishes in the browser.
+  function _openCodexAuthModal(backendId) {
+    if (backendId !== "codex") return;
+    if (_authModal?.isOpen?.()) return;
+
+    const stepEl = document.createElement("div");
+    stepEl.style.cssText = "font-size:12px;line-height:1.6;color:var(--cc-fg);";
+    const statusEl = document.createElement("div");
+    statusEl.style.cssText = "font-size:11px;color:var(--cc-fg-muted);margin-top:14px;";
+    statusEl.textContent = "Asking Codex for a device-code link…";
+
+    const container = document.createElement("div");
+    container.appendChild(stepEl);
+    container.appendChild(statusEl);
+
+    _authModal = openModal({
+      title: "Sign in to Codex (ChatGPT)",
+      subtitle: "Device-code OAuth (no paste-back, no API key)",
+      body: container,
+      width: 560,
+      onClose: () => {
+        if (_authModal?._inFlight) {
+          _wsSend({ type: "backend_auth_cancel", backend: backendId });
+        }
+        _authModal = null;
+      },
+    });
+    _authModal._inFlight = true;
+    _authModal._backendId = backendId;
+    _authModal._codexUrl = "";
+    _authModal._codexCode = "";
+
+    const _render = () => {
+      const url  = _authModal._codexUrl;
+      const code = _authModal._codexCode;
+      if (!url) {
+        stepEl.innerHTML = `
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="cc-spinner" style="
+              width:14px;height:14px;border:2px solid var(--cc-border);
+              border-top-color:var(--cc-accent);border-radius:50%;
+              animation:cc-spin 0.8s linear infinite;"></span>
+            <span>Waiting for Codex to print the device-code link…</span>
+          </div>
+        `;
+        return;
+      }
+      stepEl.innerHTML = `
+        <div style="margin-bottom:14px;">
+          <strong>Step 1 — Open the link</strong>
+          <div style="font-size:11px;color:var(--cc-fg-muted);margin-top:4px;">
+            Opens the OpenAI device-authorization page in a new tab. Sign in
+            with the ChatGPT account that owns your Codex subscription.
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;">
+          <a class="cc-auth-open-link" href="${url}" target="_blank" rel="noopener"
+             style="background:var(--cc-accent);color:var(--cc-bg);padding:8px 14px;
+                    border-radius:8px;text-decoration:none;font-weight:600;
+                    font-size:12px;display:inline-flex;align-items:center;gap:6px;">
+            Open OpenAI device sign-in &rarr;
+          </a>
+          <button class="cc-auth-copy-link" style="background:transparent;
+                  border:1px solid var(--cc-border);color:var(--cc-fg);
+                  padding:8px 14px;border-radius:8px;font-size:12px;cursor:pointer;">
+            Copy URL
+          </button>
+        </div>
+        <div style="margin-bottom:8px;">
+          <strong>Step 2 — Enter this code in the page</strong>
+          <div style="font-size:11px;color:var(--cc-fg-muted);margin-top:4px;line-height:1.5;">
+            The OpenAI page asks for a one-time code. Paste this code there:
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:stretch;margin-bottom:6px;">
+          <div class="cc-codex-code"
+               style="flex:1;padding:10px 12px;background:var(--cc-surface-tint);
+                      color:var(--cc-fg);border:1px solid var(--cc-border);
+                      border-radius:8px;font-family:ui-monospace,Menlo,Consolas,monospace;
+                      font-size:18px;letter-spacing:2px;text-align:center;">
+            ${code ? escHtml(code) : "…waiting for code…"}
+          </div>
+          <button class="cc-codex-copy-code"
+                  style="background:var(--cc-accent);color:var(--cc-bg);
+                         border:none;border-radius:8px;padding:8px 16px;
+                         font-weight:600;font-size:12px;cursor:pointer;"
+                  ${code ? "" : "disabled"}>
+            Copy code
+          </button>
+        </div>
+        <div style="font-size:11px;color:var(--cc-fg-muted);margin-top:10px;line-height:1.5;">
+          You don't need to paste anything back here — once you approve in the
+          browser, Codex finishes automatically and this dialog will switch to
+          the success state.
+        </div>
+      `;
+      stepEl.querySelector(".cc-auth-copy-link")?.addEventListener("click", () => {
+        navigator.clipboard?.writeText(url).then(
+          () => showToast("URL copied", "success", 1500),
+          () => showToast("Could not access clipboard", "error", 2000),
+        );
+      });
+      stepEl.querySelector(".cc-codex-copy-code")?.addEventListener("click", () => {
+        if (!code) return;
+        navigator.clipboard?.writeText(code).then(
+          () => showToast("Code copied", "success", 1500),
+          () => showToast("Could not access clipboard", "error", 2000),
+        );
+      });
+    };
+
+    // Required public surface — the global WS dispatcher (see
+    // `backend_auth_url` / `backend_auth_progress` / `backend_auth_complete`
+    // handlers in `runOnce`) blindly calls these by name.
+    _authModal._showWaiting = _render;
+    _authModal._showSignInLink = (url) => {
+      _authModal._codexUrl = url;
+      _render();
+      _authModal._setStatus("Waiting for you to approve in the browser…", "info");
+    };
+    _authModal._showDeviceCode = (code) => {
+      _authModal._codexCode = code;
+      _render();
+    };
+    _authModal._setStatus = (text, kind) => {
+      statusEl.textContent = text;
+      statusEl.style.color =
+        kind === "error" ? "var(--cc-accent-red)" :
+        kind === "ok"    ? "var(--cc-accent-green)" :
+        "var(--cc-fg-muted)";
+    };
+    _authModal._showSuccess = (detail) => {
+      stepEl.innerHTML = `
+        <div style="display:flex;align-items:center;gap:10px;color:var(--cc-accent-green);">
+          <span style="font-size:18px;">✓</span>
+          <div>
+            <div style="font-weight:600;">Signed in to Codex</div>
+            <div style="font-size:11px;color:var(--cc-fg-muted);margin-top:2px;">
+              ${escHtml(detail || "")}
+            </div>
+          </div>
+        </div>
+      `;
+      _authModal._setStatus("You can close this and start generating.", "ok");
+    };
+    _authModal._showFailure = (detail) => {
+      stepEl.innerHTML = `
+        <div style="display:flex;align-items:flex-start;gap:10px;color:var(--cc-accent-red);">
+          <span style="font-size:18px;">✕</span>
+          <div>
+            <div style="font-weight:600;">Sign-in failed</div>
+            <div style="font-size:11px;color:var(--cc-fg-muted);margin-top:4px;
+                        line-height:1.5;word-break:break-word;">
+              ${escHtml(detail || "")}
+            </div>
+            <button class="cc-auth-retry"
+                    style="margin-top:10px;background:var(--cc-accent);color:var(--cc-bg);
+                           border:none;border-radius:6px;padding:6px 14px;font-size:12px;
+                           font-weight:600;cursor:pointer;">
+              Try again
+            </button>
+          </div>
+        </div>
+      `;
+      stepEl.querySelector(".cc-auth-retry")?.addEventListener("click", () => {
+        _authModal?.close?.();
+        setTimeout(() => _openCodexAuthModal(backendId), 150);
+      });
+    };
+
+    _render();
+    if (!_wsSend({ type: "backend_auth_start", backend: backendId })) {
+      _authModal._setStatus("Sync server is not connected.", "error");
+      _authModal._inFlight = false;
+    }
+  }
+
   // Expose for use from the picker's action callback (it isn't in scope here
   // when createBackendPicker is called below, so we cache them on the panel
   // element via a custom event).
   panel.addEventListener("cc-backend-action", (e) => {
     const { id, action } = e.detail || {};
     if (action === "install") _openClaudeInstallModal(id);
-    else if (action === "signin") _openClaudeAuthModal(id);
+    else if (action === "signin") _openSignInModal(id);
   });
   beChip?.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -2936,11 +3314,34 @@ function createComfyClawPanel() {
     else _openBackendPopover();
   });
   // Custom event so the legacy picker (or any other code path) can poke us.
-  beChip?.addEventListener("cc-backend-refresh", _refreshBackendChip);
+  beChip?.addEventListener("cc-backend-refresh", () => {
+    _refreshBackendChip();
+    // Live-refresh the Settings → Agents tab if the user is looking at it.
+    if (_settingsModal?.refreshAgentsIfOpen) _settingsModal.refreshAgentsIfOpen();
+  });
   // Refresh after the legacy picker finishes its initial load (server tells us
   // backend availability via WS, which can demote the saved backend to litellm).
   setTimeout(_refreshBackendChip, 0);
   setTimeout(_refreshBackendChip, 1000);
+
+  // ── Expose agent state to the (module-scope) Settings modal ───────────────
+  // The Settings "Agents" tab lives in createSettingsModal() (module scope)
+  // but needs to read backend metadata + drive install/sign-in flows defined
+  // in this inner scope.  Publish a small bridge object so the tab can do its
+  // job without us having to thread state through closures.
+  _agentBridge = {
+    BACKEND_META,
+    logoHtml: (meta, size) => _backendLogoHtml(meta, size),
+    statusOf: (id) => _backendPickerRef?.status?.(id) || null,
+    activeId: () => _activeBackendId(),
+    setActive: (id) => {
+      if (_backendPickerRef?.set) _backendPickerRef.set(id);
+      else localStorage.setItem("comfyclaw_agent_backend", id);
+      _refreshBackendChip();
+    },
+    openInstall: (id) => _openClaudeInstallModal(id),
+    openSignIn:  (id) => _openSignInModal(id),
+  };
 
   // ── Composer Run button (uses chat input as generation prompt) ─────────────
   const composerRun = panel.querySelector("#cc-composer-run");
@@ -3253,6 +3654,8 @@ function _augmentPanelWithTabs(panel) {
     };
     setTimeout(askBackends, 800);
     setInterval(askBackends, 30000);
+    // Manual "Re-check" button in Settings → Agents fires this event.
+    window.addEventListener("comfyclaw:reprobe-backends", askBackends);
   }
 
   // 5) Sink for scoreboard cards: appends to the agent log.
@@ -3758,11 +4161,25 @@ class SyncClient {
     } else if (msg.type === "backend_auth_url") {
       if (_authModal?.isOpen?.() && typeof _authModal._showSignInLink === "function") {
         _authModal._showSignInLink(msg.url || "");
-        _authModal._setStatus("Waiting for you to paste the redirect URL…", "info");
+        // CodexAuthFlow sets its own status inside `_showSignInLink`; only
+        // overwrite for the Claude-style paste-back flow.
+        if (_authModal._backendId === "claude-code") {
+          _authModal._setStatus("Waiting for you to paste the redirect URL…", "info");
+        }
       }
     } else if (msg.type === "backend_auth_progress") {
-      if (_authModal?.isOpen?.() && typeof _authModal._setStatus === "function") {
-        _authModal._setStatus(msg.message || "", msg.level === "error" ? "error" : "info");
+      if (_authModal?.isOpen?.()) {
+        // CodexAuthFlow piggybacks the device code on a progress event with
+        // `level === "code"` so we can render it as a prominent monospaced
+        // chip instead of a one-line status string.
+        if (msg.level === "code" && typeof _authModal._showDeviceCode === "function") {
+          _authModal._showDeviceCode(msg.message || "");
+        } else if (typeof _authModal._setStatus === "function") {
+          _authModal._setStatus(
+            msg.message || "",
+            msg.level === "error" ? "error" : "info",
+          );
+        }
       }
     } else if (msg.type === "backend_auth_complete") {
       if (_authModal?.isOpen?.()) {

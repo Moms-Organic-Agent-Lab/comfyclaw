@@ -922,6 +922,30 @@ CLI backends require their respective binary to be on `$PATH` (override with
 If the requested CLI isn't installed, ComfyClaw automatically falls back to
 LiteLLM with a warning and the panel's backend chip turns red.
 
+#### Using your CLI subscription (no API key needed)
+
+Each CLI backend reuses whatever credentials its binary has cached locally,
+so a paid Claude / ChatGPT / Gemini Code Assist subscription is enough —
+**you do not need an `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY`**.
+
+| Backend | One-time sign-in | Where credentials live |
+|---|---|---|
+| `claude-code` | `claude /login` and pick **Claude account** *(or click "Sign in" in the panel chip — drives `claude auth login --claudeai` over paste-back OAuth)* | `~/.claude/` |
+| `codex` | `codex login` *(opens browser)* or `codex login --device-auth` *(prints a URL + code for headless servers; same paste-back flow the panel uses)* | `~/.codex/auth.json` |
+| `gemini-cli` | Run `gemini` once in a terminal and complete the Google OAuth prompt | `~/.gemini/oauth_creds.json` |
+
+The panel's backend chip now reflects auth state, not just whether the
+binary is installed:
+
+* **green dot** — installed *and* signed in (subscription credentials cached);
+* **amber dot** — installed but `needs_auth` (click → opens the matching
+  sign-in modal where available, otherwise shows the exact command to run);
+* **red dot** — `needs_install`.
+
+If you see "Falling back to litellm — which will require an API key" in the
+ComfyClaw server log after selecting Codex or Gemini, that means the CLI
+binary is on `$PATH` but you haven't completed the one-time login above.
+
 ### Debug mode (skip image generation)
 
 When iterating on the agent loop, panel UX, or new skills it's wasteful to

@@ -739,10 +739,10 @@ class SyncServer:
         flow.start()
 
     async def _handle_backend_auth_start(self, ws: Any, msg: dict) -> None:
-        from .setup_flows import ClaudeAuthFlow
+        from .setup_flows import ClaudeAuthFlow, CodexAuthFlow
 
         backend = msg.get("backend", "claude-code")
-        if backend != "claude-code":
+        if backend not in ("claude-code", "codex"):
             self._send_json_to(
                 ws,
                 {
@@ -798,7 +798,15 @@ class SyncServer:
             self._setup_flows.pop(ws)
             self._broadcast_agent_backends(ws)
 
-        flow = ClaudeAuthFlow(on_url=on_url, on_progress=on_progress, on_complete=on_complete)
+        if backend == "claude-code":
+            flow = ClaudeAuthFlow(
+                on_url=on_url, on_progress=on_progress, on_complete=on_complete
+            )
+        else:  # backend == "codex"
+            flow = CodexAuthFlow(
+                on_url=on_url, on_progress=on_progress, on_complete=on_complete
+            )
+
         prev = self._setup_flows.set(ws, flow)
         if prev:
             try:
@@ -806,14 +814,34 @@ class SyncServer:
             except Exception:  # noqa: BLE001
                 pass
 
-        auth_method = (msg.get("auth_method") or "claudeai").strip() or "claudeai"
-        flow.start(auth_method=auth_method)
+        if isinstance(flow, ClaudeAuthFlow):
+            auth_method = (msg.get("auth_method") or "claudeai").strip() or "claudeai"
+            flow.start(auth_method=auth_method)
+        else:
+            # CodexAuthFlow only supports one mode (device-code OAuth) — the
+            # `auth_method` field on the WS payload is ignored for it.
+            flow.start()
 
     def _handle_backend_auth_paste(self, ws: Any, msg: dict) -> None:
-        from .setup_flows import ClaudeAuthFlow
+        from .setup_flows import ClaudeAuthFlow, CodexAuthFlow
 
         backend = msg.get("backend", "claude-code")
         flow = self._setup_flows.get(ws)
+
+        # CodexAuthFlow uses device-code polling — no paste-back step needed,
+        # so quietly ignore a stray paste (don't surface a scary error).
+        if isinstance(flow, CodexAuthFlow):
+            self._send_json_to(
+                ws,
+                {
+                    "type": "backend_auth_progress",
+                    "backend": backend,
+                    "level": "info",
+                    "message": "Codex sign-in completes automatically once you approve in the browser.",
+                },
+            )
+            return
+
         if not isinstance(flow, ClaudeAuthFlow):
             self._send_json_to(
                 ws,

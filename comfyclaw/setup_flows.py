@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import signal
 import subprocess
 import threading
@@ -39,6 +40,7 @@ from typing import Any
 from .agent_backends.base import (
     _env_with_claude_path,
     _probe_claude_auth,
+    _probe_codex_auth,
     _resolve_claude_bin,
 )
 
@@ -375,6 +377,165 @@ class ClaudeAuthFlow(_BaseFlow):
             self._on_complete(True, detail or "Signed in")
         else:
             tail = "\n".join(self._stdout_buffer[-5:]) or detail
+            self._on_complete(False, f"Sign-in did not complete: {tail[-300:]}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Codex auth flow (ChatGPT subscription via device-code)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# `codex login --device-auth` prints something like::
+#
+#   To sign in, open https://auth.openai.com/device and enter code: ABCD-EFGH
+#
+# We grab both the URL and the user code so the panel can render them as a
+# proper button + copyable monospaced code instead of asking the user to
+# paste anything back into stdin.
+_CODEX_DEVICE_URL_RE = re.compile(
+    r"(https?://\S*(?:openai\.com|chatgpt\.com)\S*)",
+    re.IGNORECASE,
+)
+_CODEX_DEVICE_CODE_RE = re.compile(
+    r"code[^A-Za-z0-9]{0,8}([A-Z0-9]{4,}[- ]?[A-Z0-9]{4,})",
+    re.IGNORECASE,
+)
+
+
+class CodexAuthFlow(_BaseFlow):
+    """Drive ``codex login --device-auth`` over a WebSocket.
+
+    Lifecycle:
+      1. :meth:`start` spawns ``codex login --device-auth``.  Codex prints
+         a verification URL plus a short user code, then polls until the
+         user completes the device-flow approval in their browser.
+      2. A background reader thread tails stdout, extracts the URL and
+         code, and forwards both via ``on_url`` (URL) and ``on_progress``
+         (code).  The panel renders the URL as a button and the code as
+         a copy-to-clipboard chip.
+      3. Once the user approves in the browser, ``codex login`` writes
+         ``~/.codex/auth.json`` and exits 0.  We re-probe with
+         :func:`_probe_codex_auth` and fire ``on_complete``.
+    """
+
+    name = "codex-auth"
+
+    def __init__(
+        self,
+        on_url: Callable[[str], None],
+        on_progress: Callable[[str, str], None],
+        on_complete: Callable[[bool, str], None],
+    ) -> None:
+        super().__init__()
+        self._on_url = on_url
+        self._on_progress = on_progress  # (level, message)
+        self._on_complete = on_complete
+        self._reader: threading.Thread | None = None
+        self._url_seen = False
+        self._code_seen = False
+        self._stdout_buffer: list[str] = []
+        self._url_event = threading.Event()
+
+    def start(self) -> None:
+        binary = shutil.which("codex") or ""
+        if not binary:
+            self._on_complete(
+                False,
+                "Codex CLI not on PATH. Install it (`brew install codex` "
+                "or `npm i -g @openai/codex`), then try Sign in again.",
+            )
+            return
+
+        # Force the non-interactive device-code path even when a TTY exists.
+        # Without --device-auth, recent codex builds try to open a local
+        # browser via the OS default handler which silently no-ops on
+        # headless servers.
+        env = {**os.environ, "DISPLAY": "", "BROWSER": "true"}
+
+        try:
+            self._proc = subprocess.Popen(
+                [binary, "login", "--device-auth"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                env=env,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._on_complete(False, f"Failed to launch codex: {exc}")
+            return
+
+        self._started_at = time.time()
+        self._on_progress("info", "Launching Codex device sign-in…")
+        self._reader = threading.Thread(target=self._pump, daemon=True, name="codex-auth-pump")
+        self._reader.start()
+
+    def _pump(self) -> None:
+        proc = self._proc
+        assert proc is not None and proc.stdout is not None
+        try:
+            for raw in iter(proc.stdout.readline, ""):
+                if self._stopped.is_set():
+                    break
+                line = raw.rstrip("\n")
+                if not line:
+                    continue
+                self._stdout_buffer.append(line)
+                self._on_progress("stdout", line)
+
+                # Strip ANSI styling before pattern-matching.
+                clean = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line)
+
+                if not self._url_seen:
+                    m = _CODEX_DEVICE_URL_RE.search(clean)
+                    if m:
+                        url = m.group(1).rstrip(".,)")
+                        self._url_seen = True
+                        self._on_url(url)
+                        self._url_event.set()
+
+                if not self._code_seen:
+                    m = _CODEX_DEVICE_CODE_RE.search(clean)
+                    if m:
+                        self._code_seen = True
+                        # We piggyback on on_progress with a tagged level so
+                        # the panel can render the code distinctly.
+                        self._on_progress("code", m.group(1).strip())
+        except Exception as exc:  # noqa: BLE001
+            self._on_progress("error", f"Reader error: {exc}")
+        finally:
+            rc = proc.wait()
+            self._finish(rc)
+
+    def wait_for_url(self, timeout: float = 30.0) -> bool:
+        return self._url_event.wait(timeout=timeout)
+
+    def _finish(self, rc: int) -> None:
+        if self._stopped.is_set():
+            self._on_complete(False, "cancelled")
+            return
+
+        # The user-facing browser flow can succeed (codex exits 0) or fail
+        # (rc != 0, e.g. token never approved → timeout). Re-probe either
+        # way so the panel reflects the post-flow auth state.
+        binary = shutil.which("codex") or ""
+        if not binary:
+            self._on_complete(False, "codex binary disappeared after login")
+            return
+
+        state, _method, detail = _probe_codex_auth(binary)
+        if state == "ok":
+            self._on_complete(True, detail or "Signed in")
+            return
+
+        tail = "\n".join(self._stdout_buffer[-5:]) or detail
+        if rc != 0:
+            self._on_complete(
+                False,
+                f"codex login exited with code {rc}: {tail[-300:]}",
+            )
+        else:
             self._on_complete(False, f"Sign-in did not complete: {tail[-300:]}")
 
 

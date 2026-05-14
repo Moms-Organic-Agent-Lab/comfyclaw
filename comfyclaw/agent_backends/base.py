@@ -116,8 +116,17 @@ def get_backend(
 ) -> AgentBackend:
     """Return a backend instance by name.
 
-    Falls back to LiteLLM with a printed warning if the requested CLI
-    backend's binary is missing.
+    Falls back to LiteLLM with a **prominent** printed warning if the
+    requested CLI backend is unavailable.  We deliberately distinguish two
+    failure modes so the user sees the real reason in the server log:
+
+    * Binary missing  → "CLI not installed".
+    * Binary present but not signed in → "CLI installed but not signed in
+      — falling back to litellm (which needs an API key)."
+
+    The latter case is the most common source of "why is it asking for my
+    API key?" confusion from teammates who installed e.g. ``codex`` but
+    never ran ``codex login``.
     """
     name = (name or "litellm").strip().lower().replace("_", "-")
     extra = extra or {}
@@ -127,27 +136,63 @@ def get_backend(
 
         return LiteLLMBackend(model=model, api_key=api_key, api_base=api_base)
 
+    def _check_cli_auth(canonical: str) -> None:
+        """Log a clear warning when the CLI is installed but not signed in.
+
+        We *do* return the CLI backend in that case (the user explicitly
+        asked for it), but the agent's first call will fail with a cryptic
+        ``rc=1`` from the CLI — so we log the actual reason up-front in the
+        server log to short-circuit the inevitable "why is this asking for
+        an API key?" debugging session.
+        """
+        statuses = {s.name: s for s in probe_all()}
+        st = statuses.get(canonical)
+        if not st or st.state == "ok":
+            return
+        if st.state == "needs_auth":
+            print(
+                f"[agent_backends] '{canonical}' CLI is installed but not "
+                f"signed in ({st.detail}). The next agent call will fail "
+                f"until you complete the sign-in flow from the panel "
+                f"(or run the CLI's `login` command manually). No fallback "
+                f"to litellm — you picked this backend on purpose."
+            )
+
+    def _missing_warn(canonical: str) -> None:
+        """Log the fallback-to-litellm case (binary actually missing)."""
+        statuses = {s.name: s for s in probe_all()}
+        st = statuses.get(canonical)
+        if not st:
+            return
+        print(
+            f"[agent_backends] '{canonical}' CLI not found on PATH "
+            f"({st.detail}). Falling back to litellm (API key required)."
+        )
+
     if name in ("claude-code", "claude"):
         from .claude_code_backend import ClaudeCodeBackend
 
         be = ClaudeCodeBackend(model=model or extra.get("model", ""))
         if be.is_available():
+            _check_cli_auth("claude-code")
             return be
-        print(f"[agent_backends] '{name}' CLI not found on PATH — falling back to litellm.")
+        _missing_warn("claude-code")
     elif name in ("codex", "openai-codex"):
         from .codex_backend import CodexBackend
 
         be = CodexBackend(model=model or extra.get("model", ""))
         if be.is_available():
+            _check_cli_auth("codex")
             return be
-        print(f"[agent_backends] '{name}' CLI not found on PATH — falling back to litellm.")
+        _missing_warn("codex")
     elif name in ("gemini-cli", "gemini"):
         from .gemini_backend import GeminiCLIBackend
 
         be = GeminiCLIBackend(model=model or extra.get("model", ""))
         if be.is_available():
+            _check_cli_auth("gemini-cli")
             return be
-        print(f"[agent_backends] '{name}' CLI not found on PATH — falling back to litellm.")
+        _missing_warn("gemini-cli")
     else:
         print(f"[agent_backends] Unknown backend {name!r} — falling back to litellm.")
 
@@ -295,6 +340,85 @@ def _probe_claude_auth(binary: str) -> tuple[BackendState, str, str]:
     return "needs_auth", auth_method, "Not signed in"
 
 
+def _probe_codex_auth(binary: str) -> tuple[BackendState, str, str]:
+    """Run ``codex login status`` and parse the result.
+
+    Returns ``(state, auth_method, detail)`` where ``auth_method`` is one of:
+
+    * ``"chatgpt"``  — signed in with ChatGPT (Pro/Team/Enterprise subscription),
+    * ``"apikey"``   — `~/.codex/auth.json` holds an ``OPENAI_API_KEY``,
+    * ``""``         — not signed in / unknown.
+
+    The Codex CLI exits 0 + prints ``Logged in using ChatGPT`` (or ``Logged in
+    using API key``) when authenticated, and exits 1 + prints ``Not logged in``
+    otherwise.
+    """
+    try:
+        proc = subprocess.run(
+            [binary, "login", "status"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        return "error", "", f"auth probe failed: {exc}"
+    except Exception as exc:  # noqa: BLE001
+        return "error", "", f"auth probe failed: {exc}"
+
+    raw = ((proc.stdout or "") + " " + (proc.stderr or "")).strip()
+    low = raw.lower()
+
+    if proc.returncode == 0 and "logged in" in low:
+        if "chatgpt" in low:
+            return "ok", "chatgpt", "Signed in with ChatGPT"
+        if "api key" in low or "apikey" in low:
+            return "ok", "apikey", "Signed in with API key"
+        return "ok", "", raw[:160] or "Signed in"
+
+    # rc != 0 OR "not logged in" prose -> needs auth.
+    if "not logged in" in low or proc.returncode != 0:
+        return "needs_auth", "", "Not signed in"
+    return "error", "", raw[:160] or "auth probe returned unexpected output"
+
+
+def _probe_gemini_auth(binary: str) -> tuple[BackendState, str, str]:
+    """Detect whether the user can talk to Gemini without an API key.
+
+    The Gemini CLI does **not** expose an ``auth status`` subcommand (its
+    OAuth flow is purely interactive on first run), so we use a file-and-env
+    heuristic that matches what dr-claw's ``gemini-api.js`` checks:
+
+    * ``$GEMINI_API_KEY`` / ``$GOOGLE_API_KEY`` set → API-key auth available;
+    * ``~/.gemini/oauth_creds.json`` present and non-empty → OAuth credentials
+      cached by a previous ``gemini`` invocation.
+
+    Returns ``(state, auth_method, detail)``.
+    """
+    # 1. API-key path (still counts as "ok" — user can hit Gemini even without
+    #    a subscription).
+    for env_var in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        if os.environ.get(env_var, "").strip():
+            return "ok", "apikey", f"Using ${env_var} (API)"
+
+    # 2. OAuth credentials cached by an earlier `gemini` run.
+    creds_path = os.path.expanduser("~/.gemini/oauth_creds.json")
+    try:
+        st = os.stat(creds_path)
+    except FileNotFoundError:
+        return (
+            "needs_auth",
+            "",
+            "Run `gemini` once in a terminal and sign in with your Google account",
+        )
+    except OSError as exc:
+        return "error", "", f"oauth_creds.json unreadable: {exc}"
+
+    if st.st_size <= 2:  # empty `{}` or empty file
+        return "needs_auth", "", "Gemini oauth_creds.json is empty"
+
+    return "ok", "oauth", "Signed in via Google OAuth"
+
+
 def probe_all() -> list[BackendStatus]:
     """Return availability for every registered backend.
 
@@ -336,16 +460,62 @@ def probe_all() -> list[BackendStatus]:
             )
         )
 
-    # ── codex / gemini-cli — binary-presence only ────────────────────────────
-    for cli, key in (("codex", "codex"), ("gemini", "gemini-cli")):
-        path = shutil.which(cli) or ""
+    # ── codex ────────────────────────────────────────────────────────────────
+    codex_bin = shutil.which("codex") or ""
+    if not codex_bin:
         out.append(
             BackendStatus(
-                name=key,
-                available=bool(path),
-                state="ok" if path else "unsupported",
-                binary_path=path,
-                detail=("" if path else f"`{cli}` not on PATH"),
+                name="codex",
+                available=False,
+                state="needs_install",
+                detail=(
+                    "Codex CLI not on PATH. Install with `brew install codex` "
+                    "or `npm i -g @openai/codex`, then sign in with your "
+                    "ChatGPT account."
+                ),
+                can_install=False,  # no scripted installer; pointers in detail
+            )
+        )
+    else:
+        c_state, c_method, c_detail = _probe_codex_auth(codex_bin)
+        out.append(
+            BackendStatus(
+                name="codex",
+                available=(c_state == "ok"),
+                state=c_state,
+                binary_path=codex_bin,
+                auth_method=c_method,
+                detail=c_detail or f"`codex` at {codex_bin}",
+                can_install=False,
+            )
+        )
+
+    # ── gemini-cli ───────────────────────────────────────────────────────────
+    gemini_bin = shutil.which("gemini") or ""
+    if not gemini_bin:
+        out.append(
+            BackendStatus(
+                name="gemini-cli",
+                available=False,
+                state="needs_install",
+                detail=(
+                    "Gemini CLI not on PATH. Install with "
+                    "`npm i -g @google/gemini-cli`, then run `gemini` once "
+                    "and sign in with your Google account."
+                ),
+                can_install=False,
+            )
+        )
+    else:
+        g_state, g_method, g_detail = _probe_gemini_auth(gemini_bin)
+        out.append(
+            BackendStatus(
+                name="gemini-cli",
+                available=(g_state == "ok"),
+                state=g_state,
+                binary_path=gemini_bin,
+                auth_method=g_method,
+                detail=g_detail or f"`gemini` at {gemini_bin}",
                 can_install=False,
             )
         )
