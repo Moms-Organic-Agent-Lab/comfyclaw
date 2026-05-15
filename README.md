@@ -271,7 +271,7 @@ COMFYUI_DIR=~/Documents/ComfyUI
 
 # Optional: model and behavior overrides
 # COMFYCLAW_MODEL=anthropic/claude-sonnet-4-5
-# COMFYCLAW_VERIFIER_MODEL=openai/gpt-4o
+# COMFYCLAW_VERIFIER_MODEL=openai/gpt-5.4
 # COMFYCLAW_VERIFIER_MODE=vlm
 # COMFYCLAW_MAX_ITERATIONS=3
 # COMFYCLAW_THRESHOLD=0.85
@@ -348,7 +348,7 @@ You can configure the server with the same flags as `run`:
 
 ```bash
 comfyclaw serve \
-  --model openai/gpt-4o \
+  --model openai/gpt-5.4 \
   --iterations 5 \
   --threshold 0.9
 ```
@@ -490,7 +490,7 @@ with provider prefix:
 | Provider | Model string | Required env var |
 |---|---|---|
 | **Anthropic** (default) | `anthropic/claude-sonnet-4-5` | `ANTHROPIC_API_KEY` |
-| **OpenAI** | `openai/gpt-4o` | `OPENAI_API_KEY` |
+| **OpenAI** | `openai/gpt-5.4` | `OPENAI_API_KEY` |
 | **Google Gemini** | `gemini/gemini-2.0-flash` | `GEMINI_API_KEY` |
 | **Groq** | `groq/llama-3.3-70b-versatile` | `GROQ_API_KEY` |
 | **Azure OpenAI** | `azure/<deployment>` | `AZURE_API_KEY` + `AZURE_API_BASE` |
@@ -517,7 +517,7 @@ comfyclaw run \
 ```
 
 > **Vision requirement**: the `--verifier-model` must support image inputs.
-> Good choices: `anthropic/claude-*`, `openai/gpt-4o`, `gemini/gemini-*`,
+> Good choices: `anthropic/claude-*`, `openai/gpt-5.4`, `gemini/gemini-*`,
 > `ollama/llava`.
 
 ---

@@ -42,30 +42,30 @@ import { app } from "../../scripts/app.js";
 // of the panel, but these modules supply the new tab strip, scoreboard,
 // mode toggle, backend picker, skills browser, and history tab.
 import { injectStyles } from "./lib/styles.js";
-import { createTabStrip }       from "./panel/tabs.js";
-import { createModeToggle }     from "./lib/mode_toggle.js";
-import { createBackendPicker }  from "./lib/backend_picker.js";
-import { createSkillsTab }      from "./lib/skills_panel.js";
-import { createHistoryTab }     from "./lib/history_panel.js";
-import { buildScoreboardCard }  from "./lib/scoreboard.js";
-import { openModal }            from "./lib/modal.js";
+import { createTabStrip } from "./panel/tabs.js";
+import { createModeToggle } from "./lib/mode_toggle.js";
+import { createBackendPicker } from "./lib/backend_picker.js";
+import { createSkillsTab } from "./lib/skills_panel.js";
+import { createHistoryTab } from "./lib/history_panel.js";
+import { buildScoreboardCard } from "./lib/scoreboard.js";
+import { openModal } from "./lib/modal.js";
 
 injectStyles();
 
-const DEFAULT_WS_URL         = `ws://${window.location.hostname}:8765`;
-const RECONNECT_DELAY_MS     = 3000;
+const DEFAULT_WS_URL = `ws://${window.location.hostname}:8765`;
+const RECONNECT_DELAY_MS = 3000;
 const MAX_RECONNECT_ATTEMPTS = 20;
-const DEFAULT_OP_DELAY_MS    = 400;
+const DEFAULT_OP_DELAY_MS = 400;
 
 // ── Chat state ────────────────────────────────────────────────────────────────
-let _chatHistory      = [];   // [{role, content}]
-let _chatMsgIdSeq     = 0;
-let _chatStreaming     = false;
+let _chatHistory = [];   // [{role, content}]
+let _chatMsgIdSeq = 0;
+let _chatStreaming = false;
 let _thinkingChatMsgId = null;  // message_id of the current streaming reply in the log
 
 // ── Generation state ──────────────────────────────────────────────────────────
 let _isGenerating = false;
-let _genStartTime  = 0;          // epoch ms when last generation started
+let _genStartTime = 0;          // epoch ms when last generation started
 let _genTimerInterval = null;    // interval for elapsed-time display
 
 // ── Checkpoint state ──────────────────────────────────────────────────────────
@@ -94,12 +94,12 @@ function _ensureToastContainer() {
 }
 
 function showToast(msg, type = "info", duration = 2800) {
-  const icons = { success:"✓", error:"✕", info:"ℹ", warning:"⚠" };
+  const icons = { success: "✓", error: "✕", info: "ℹ", warning: "⚠" };
   const colors = {
-    success: { bg:"#a6e3a122", border:"#a6e3a1", text:"#a6e3a1" },
-    error:   { bg:"#f38ba822", border:"#f38ba8", text:"#f38ba8" },
-    info:    { bg:"#89b4fa22", border:"#89b4fa", text:"#89b4fa" },
-    warning: { bg:"#f9e2af22", border:"#f9e2af", text:"#f9e2af" },
+    success: { bg: "#a6e3a122", border: "#a6e3a1", text: "#a6e3a1" },
+    error: { bg: "#f38ba822", border: "#f38ba8", text: "#f38ba8" },
+    info: { bg: "#89b4fa22", border: "#89b4fa", text: "#89b4fa" },
+    warning: { bg: "#f9e2af22", border: "#f9e2af", text: "#f9e2af" },
   };
   const c = colors[type] || colors.info;
   const container = _ensureToastContainer();
@@ -113,7 +113,7 @@ function showToast(msg, type = "info", duration = 2800) {
     opacity:0; transition:opacity 0.2s, transform 0.2s;
     transform:translateY(8px);
   `;
-  el.innerHTML = `<span style="font-size:14px;">${icons[type]||icons.info}</span><span>${escHtml(msg)}</span>`;
+  el.innerHTML = `<span style="font-size:14px;">${icons[type] || icons.info}</span><span>${escHtml(msg)}</span>`;
   container.appendChild(el);
   requestAnimationFrame(() => {
     el.style.opacity = "1";
@@ -128,8 +128,8 @@ function showToast(msg, type = "info", duration = 2800) {
 
 const NODE_W = 220;
 const NODE_H = 180;
-const GAP_X  = 60;
-const GAP_Y  = 40;
+const GAP_X = 60;
+const GAP_Y = 40;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -178,11 +178,11 @@ function createStatusBadge() {
 }
 
 const STATUS = {
-  connecting:   { bg: "#555",    fg: "#fff", label: "🔄 ComfyClaw: connecting…"    },
-  connected:    { bg: "#1a7a3f", fg: "#fff", label: "🟢 ComfyClaw: live"           },
-  disconnected: { bg: "#7a1a1a", fg: "#fff", label: "🔴 ComfyClaw: disconnected"   },
-  updated:      { bg: "#1a4a7a", fg: "#fff", label: "✨ ComfyClaw: graph updated"  },
-  feedback:     { bg: "#7a5a1a", fg: "#fff", label: "📝 ComfyClaw: awaiting feedback" },
+  connecting: { bg: "#555", fg: "#fff", label: "🔄 ComfyClaw: connecting…" },
+  connected: { bg: "#1a7a3f", fg: "#fff", label: "🟢 ComfyClaw: live" },
+  disconnected: { bg: "#7a1a1a", fg: "#fff", label: "🔴 ComfyClaw: disconnected" },
+  updated: { bg: "#1a4a7a", fg: "#fff", label: "✨ ComfyClaw: graph updated" },
+  feedback: { bg: "#7a5a1a", fg: "#fff", label: "📝 ComfyClaw: awaiting feedback" },
 };
 
 function setStatus(state, extra) {
@@ -214,7 +214,7 @@ let _activeSyncClient = null;
 
 // ── Setup modals (singletons; module-level so the WS handler can reach them)
 let _installModal = null;
-let _authModal    = null;
+let _authModal = null;
 
 function _wsOpen() {
   return _activeSyncClient?.ws?.readyState === WebSocket.OPEN;
@@ -229,31 +229,31 @@ function createFeedbackPanel() {
   const overlay = document.createElement("div");
   overlay.id = "comfyclaw-feedback-overlay";
   Object.assign(overlay.style, {
-    display:        "none",
-    position:       "fixed",
-    top:            "0",
-    left:           "0",
-    width:          "100vw",
-    height:         "100vh",
-    background:     "rgba(0,0,0,0.5)",
-    zIndex:         "10000",
+    display: "none",
+    position: "fixed",
+    top: "0",
+    left: "0",
+    width: "100vw",
+    height: "100vh",
+    background: "rgba(0,0,0,0.5)",
+    zIndex: "10000",
     justifyContent: "center",
-    alignItems:     "center",
+    alignItems: "center",
   });
 
   const panel = document.createElement("div");
   Object.assign(panel.style, {
-    background:    "#1e1e2e",
-    color:         "#cdd6f4",
-    borderRadius:  "12px",
-    padding:       "24px",
-    width:         "520px",
-    maxHeight:     "80vh",
-    overflowY:     "auto",
-    boxShadow:     "0 8px 32px rgba(0,0,0,0.5)",
-    fontFamily:    "system-ui, -apple-system, sans-serif",
-    fontSize:      "14px",
-    lineHeight:    "1.5",
+    background: "#1e1e2e",
+    color: "#cdd6f4",
+    borderRadius: "12px",
+    padding: "24px",
+    width: "520px",
+    maxHeight: "80vh",
+    overflowY: "auto",
+    boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+    fontFamily: "system-ui, -apple-system, sans-serif",
+    fontSize: "14px",
+    lineHeight: "1.5",
   });
 
   panel.innerHTML = `
@@ -294,8 +294,8 @@ function createFeedbackPanel() {
   document.body.appendChild(overlay);
 
   const scoreButtons = [
-    { label: "👍 Good",       score: 0.9, color: "#a6e3a1" },
-    { label: "👌 OK",         score: 0.6, color: "#f9e2af" },
+    { label: "👍 Good", score: 0.9, color: "#a6e3a1" },
+    { label: "👌 OK", score: 0.6, color: "#f9e2af" },
     { label: "👎 Needs Work", score: 0.3, color: "#f38ba8" },
   ];
   const scoreContainer = panel.querySelector("#comfyclaw-fb-scores");
@@ -306,16 +306,16 @@ function createFeedbackPanel() {
     btn.textContent = label;
     btn.dataset.score = score;
     Object.assign(btn.style, {
-      flex:          "1",
-      padding:       "8px 4px",
-      border:        "2px solid #45475a",
-      borderRadius:  "8px",
-      background:    "#313244",
-      color:         "#cdd6f4",
-      cursor:        "pointer",
-      fontSize:      "13px",
-      fontWeight:    "600",
-      transition:    "all 0.15s",
+      flex: "1",
+      padding: "8px 4px",
+      border: "2px solid #45475a",
+      borderRadius: "8px",
+      background: "#313244",
+      color: "#cdd6f4",
+      cursor: "pointer",
+      fontSize: "13px",
+      fontWeight: "600",
+      transition: "all 0.15s",
     });
     btn.addEventListener("click", () => {
       selectedScore = score;
@@ -337,9 +337,9 @@ function createFeedbackPanel() {
   function sendFeedback(action) {
     const text = panel.querySelector("#comfyclaw-fb-text").value.trim();
     const msg = {
-      type:   "human_feedback",
-      text:   action === "accept" ? "" : text,
-      score:  action === "accept" ? 0.85 : selectedScore,
+      type: "human_feedback",
+      text: action === "accept" ? "" : text,
+      score: action === "accept" ? 0.85 : selectedScore,
       action: action,
     };
     if (_activeSyncClient && _activeSyncClient.ws && _activeSyncClient.ws.readyState === WebSocket.OPEN) {
@@ -400,12 +400,12 @@ function isApiFormat(data) {
 }
 
 function apiToLitegraph(apiWf) {
-  const nodes  = [];
-  const links  = [];
+  const nodes = [];
+  const links = [];
   let linkCounter = 0;
-  const linkMap   = {};
+  const linkMap = {};
 
-  const ids  = Object.keys(apiWf).sort((a, b) => parseInt(a) - parseInt(b));
+  const ids = Object.keys(apiWf).sort((a, b) => parseInt(a) - parseInt(b));
   const COLS = 5;
 
   const posMap = {};
@@ -416,8 +416,8 @@ function apiToLitegraph(apiWf) {
   });
 
   ids.forEach(nid => {
-    const apiNode       = apiWf[nid];
-    const inputs_meta   = [];
+    const apiNode = apiWf[nid];
+    const inputs_meta = [];
     const widgets_values = [];
 
     for (const [key, val] of Object.entries(apiNode.inputs || {})) {
@@ -439,29 +439,29 @@ function apiToLitegraph(apiWf) {
     }
 
     nodes.push({
-      id:             parseInt(nid),
-      type:           apiNode.class_type,
-      pos:            posMap[nid],
-      size:           [NODE_W, NODE_H],
-      flags:          {},
-      order:          parseInt(nid),
-      mode:           0,
-      inputs:         inputs_meta,
-      outputs:        [],
-      title:          apiNode._meta?.title || apiNode.class_type,
-      properties:     { "Node name for S&R": apiNode.class_type },
+      id: parseInt(nid),
+      type: apiNode.class_type,
+      pos: posMap[nid],
+      size: [NODE_W, NODE_H],
+      flags: {},
+      order: parseInt(nid),
+      mode: 0,
+      inputs: inputs_meta,
+      outputs: [],
+      title: apiNode._meta?.title || apiNode.class_type,
+      properties: { "Node name for S&R": apiNode.class_type },
       widgets_values,
     });
   });
 
   const maxId = ids.reduce((m, k) => Math.max(m, parseInt(k)), 0);
   return {
-    last_node_id:  maxId,
-    last_link_id:  linkCounter - 1,
+    last_node_id: maxId,
+    last_link_id: linkCounter - 1,
     nodes, links,
-    groups:  [],
-    config:  {},
-    extra:   { comfyclaw: true },
+    groups: [],
+    config: {},
+    extra: { comfyclaw: true },
     version: 0.4,
   };
 }
@@ -517,15 +517,15 @@ function highlightNode(nodeId, durationMs = 1500) {
   const lgNode = app.graph?.getNodeById(parseInt(nodeId));
   if (!lgNode) return;
 
-  const origColor   = lgNode.color;
+  const origColor = lgNode.color;
   const origBgcolor = lgNode.bgcolor;
 
-  lgNode.color   = "#4a9eff";
+  lgNode.color = "#4a9eff";
   lgNode.bgcolor = "#1a3a5a";
   app.graph?.setDirtyCanvas?.(true, true);
 
   setTimeout(() => {
-    lgNode.color   = origColor;
+    lgNode.color = origColor;
     lgNode.bgcolor = origBgcolor;
     app.graph?.setDirtyCanvas?.(true, true);
   }, durationMs);
@@ -586,35 +586,34 @@ const PROVIDERS = {
   anthropic: {
     label: "Anthropic", emoji: "◆", color: "#cd7f32",
     models: [
-      { value: "anthropic/claude-sonnet-4-5",        label: "Claude Sonnet 4.5" },
-      { value: "anthropic/claude-sonnet-4-20250514",  label: "Claude Sonnet 4"   },
-      { value: "anthropic/claude-opus-4-20250514",    label: "Claude Opus 4"     },
-      { value: "anthropic/claude-haiku-3-5-20241022", label: "Claude Haiku 3.5"  },
+      { value: "anthropic/claude-opus-4-7", label: "Claude Opus 4.7" },
+      { value: "anthropic/claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+      { value: "anthropic/claude-haiku-4-5", label: "Claude Haiku 4.5" },
     ],
   },
   openai: {
     label: "OpenAI", emoji: "○", color: "#10a37f",
     models: [
-      { value: "openai/gpt-5.5",      label: "GPT-5.5"       },
-      { value: "openai/gpt-5.4",      label: "GPT-5.4"       },
-      { value: "openai/gpt-5.4-mini", label: "GPT-5.4 mini"  },
-      { value: "openai/gpt-5.4-nano", label: "GPT-5.4 nano"  },
+      { value: "openai/gpt-5.5", label: "GPT-5.5" },
+      { value: "openai/gpt-5.4", label: "GPT-5.4" },
+      { value: "openai/gpt-5.4-mini", label: "GPT-5.4 mini" },
+      { value: "openai/gpt-5.4-nano", label: "GPT-5.4 nano" },
     ],
   },
   google: {
     label: "Google", emoji: "✦", color: "#4285f4",
     models: [
-      { value: "gemini/gemini-2.5-pro",  label: "Gemini 2.5 Pro"   },
-      { value: "gemini/gemini-2.5-flash", label: "Gemini 2.5 Flash" },
-      { value: "gemini/gemini-2.0-flash", label: "Gemini 2.0 Flash" },
+      { value: "gemini/gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
+      { value: "gemini/gemini-3-flash-preview", label: "Gemini 3 Flash" },
+      { value: "gemini/gemini-3.1-flash-lite", label: "Gemini 3.1 Flash Lite" },
     ],
   },
   ollama: {
     label: "Ollama", emoji: "▲", color: "#a6e3a1",
     models: [
-      { value: "ollama/llama3.2",    label: "Llama 3.2"    },
+      { value: "ollama/llama3.2", label: "Llama 3.2" },
       { value: "ollama/qwen2.5:14b", label: "Qwen 2.5 14B" },
-      { value: "ollama/mistral:7b",  label: "Mistral 7B"   },
+      { value: "ollama/mistral:7b", label: "Mistral 7B" },
     ],
   },
   // "Custom" tab — only shown when the user has added at least one custom
@@ -625,6 +624,102 @@ const PROVIDERS = {
     models: [],
   },
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLI-backend model registries
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Each subscription-backed CLI (Claude Code, Codex, Gemini CLI) has its
+// own allow-list of model ids tied to the signed-in account.  These are
+// the strings the CLI's ``-m`` / ``--model`` flag accepts; they do NOT
+// overlap with the LiteLLM registry above, so we keep a separate map
+// and only show the relevant list when the matching backend is active.
+// The first entry in each list is treated as the default.
+const CLI_MODELS = {
+  "claude-code": {
+    label: "Claude Code",
+    color: "#cc785c",
+    models: [
+      { value: "", label: "CLI default" },
+      { value: "sonnet", label: "Sonnet (latest)" },
+      { value: "opus", label: "Opus (latest)" },
+      { value: "haiku", label: "Haiku (latest)" },
+      { value: "claude-opus-4-7", label: "Claude Opus 4.7" },
+      { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+      { value: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
+    ],
+  },
+  "codex": {
+    label: "Codex",
+    color: "#10a37f",
+    models: [
+      { value: "", label: "CLI default" },
+      { value: "gpt-5.5", label: "GPT-5.5" },
+      { value: "gpt-5.4", label: "GPT-5.4" },
+      { value: "gpt-5.4-mini", label: "GPT-5.4 mini" },
+      { value: "gpt-5.4-nano", label: "GPT-5.4 nano" },
+    ],
+  },
+  "gemini-cli": {
+    label: "Gemini CLI",
+    color: "#4285f4",
+    models: [
+      { value: "", label: "CLI default" },
+      { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
+      { value: "gemini-3-flash-preview", label: "Gemini 3 Flash" },
+      { value: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash Lite" },
+    ],
+  },
+};
+
+// LocalStorage key holding the per-CLI-backend last-selected model.
+// Shape: { "claude-code": "sonnet", "codex": "gpt-5-codex", … }
+const _CLI_MODEL_KEY = "comfyclaw_cli_model_by_backend_v1";
+
+function _loadCliModelMap() {
+  try {
+    return JSON.parse(localStorage.getItem(_CLI_MODEL_KEY)) || {};
+  } catch (_) {
+    return {};
+  }
+}
+
+let _cliModelByBackend = _loadCliModelMap();
+
+function _saveCliModelMap() {
+  try {
+    localStorage.setItem(_CLI_MODEL_KEY, JSON.stringify(_cliModelByBackend));
+  } catch (_) { }
+}
+
+/** Returns true if the given backend id is one of the CLI-driven backends. */
+function _isCliBackend(id) {
+  return id === "claude-code" || id === "codex" || id === "gemini-cli";
+}
+
+/** Return the currently selected model id for a CLI backend (may be ""). */
+function _cliModelFor(backendId) {
+  if (!_isCliBackend(backendId)) return "";
+  const saved = _cliModelByBackend[backendId];
+  if (saved != null) return saved;
+  // Default to the first entry in the CLI's list.
+  const list = CLI_MODELS[backendId]?.models || [];
+  return list[0]?.value ?? "";
+}
+
+/** Persist a per-CLI-backend model choice. */
+function _setCliModelFor(backendId, value) {
+  if (!_isCliBackend(backendId)) return;
+  _cliModelByBackend[backendId] = value || "";
+  _saveCliModelMap();
+}
+
+/** Lookup the display label for a given CLI model id. */
+function _cliModelLabel(backendId, value) {
+  const list = CLI_MODELS[backendId]?.models || [];
+  const m = list.find((x) => x.value === (value || ""));
+  return m ? m.label : (value || "CLI default");
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Workflow identity helpers
@@ -664,20 +759,20 @@ function _detectWorkflowIdentity(apiWorkflow = null) {
     const active = wm?.activeWorkflow || wm?.currentWorkflow;
     const n = _asStr(active?.name);
     if (n) return { name: n, source: "wm" };
-  } catch(_) {}
+  } catch (_) { }
 
   // 2. graph.extra.info.name  (written on "Save As")
   try {
     const n = _asStr(app.graph?.extra?.info?.name) || _asStr(app.graph?.extra?.name);
     if (n && n.trim() && n !== "unnamed") return { name: n.trim(), source: "graph" };
-  } catch(_) {}
+  } catch (_) { }
 
   // 3. document.title  ("My Workflow - ComfyUI")
   try {
     const title = document.title.replace(/\s*[-–|]\s*ComfyUI.*$/i, "").trim();
     if (title && title.toLowerCase() !== "comfyui" && title.length > 1)
       return { name: title, source: "title" };
-  } catch(_) {}
+  } catch (_) { }
 
   // 4. Content hash — top N node class_types sorted → short djb2 hash
   const wf = apiWorkflow || _currentApiWorkflow;
@@ -709,23 +804,23 @@ function _isSameWorkflow(idA, idB) {
 // Session management
 // ─────────────────────────────────────────────────────────────────────────────
 
-const _SESSION_KEY        = "comfyclaw_sessions_v3";   // bumped to avoid stale data
+const _SESSION_KEY = "comfyclaw_sessions_v3";   // bumped to avoid stale data
 const _ACTIVE_SESSION_KEY = "comfyclaw_active_session_v3";
 
 function _mkSession(name = "Session 1", workflowId = "") {
   return {
-    id:         `s${Date.now()}${Math.random().toString(36).slice(2,6)}`,
-    name:       _asStr(name) || "Session 1",
+    id: `s${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
+    name: _asStr(name) || "Session 1",
     workflowId: _asStr(workflowId),  // identity string from _detectWorkflowIdentity().name
-    prompt:     "",
-    chatHistory:[],
-    provider:   "anthropic",
-    model:      "",
-    createdAt:  Date.now(),
+    prompt: "",
+    chatHistory: [],
+    provider: "anthropic",
+    model: "",
+    createdAt: Date.now(),
   };
 }
 
-let _sessions = (() => { try { return JSON.parse(localStorage.getItem(_SESSION_KEY)) || []; } catch(_){} return []; })();
+let _sessions = (() => { try { return JSON.parse(localStorage.getItem(_SESSION_KEY)) || []; } catch (_) { } return []; })();
 // Migrate old sessions: ensure workflowId exists and that .name / .workflowId
 // are plain strings. Older builds wrote Vue Refs in here, which JSON.stringify
 // turned into {} and then rendered as "[object Object]" on every reload.
@@ -736,7 +831,7 @@ _sessions.forEach((s, i) => {
 });
 if (!_sessions.length) _sessions = [_mkSession()];
 // Persist sanitized sessions back so the broken titles never come back.
-try { localStorage.setItem(_SESSION_KEY, JSON.stringify(_sessions)); } catch (_) {}
+try { localStorage.setItem(_SESSION_KEY, JSON.stringify(_sessions)); } catch (_) { }
 
 let _activeSessionId = localStorage.getItem(_ACTIVE_SESSION_KEY) || _sessions[0].id;
 if (!_sessions.find(s => s.id === _activeSessionId)) _activeSessionId = _sessions[0].id;
@@ -748,12 +843,12 @@ function _persistSessions() { localStorage.setItem(_SESSION_KEY, JSON.stringify(
 function _captureCurrentSession() {
   const sess = _activeSession();
   const promptEl = document.getElementById("comfyclaw-gen-prompt");
-  const modelEl  = document.getElementById("comfyclaw-gen-model");
-  const provEl   = document.getElementById("comfyclaw-provider-state");
+  const modelEl = document.getElementById("comfyclaw-gen-model");
+  const provEl = document.getElementById("comfyclaw-provider-state");
   if (promptEl) sess.prompt = promptEl.value;
   sess.chatHistory = [..._chatHistory];
-  if (modelEl)  sess.model    = modelEl.value;
-  if (provEl)   sess.provider = provEl.dataset.provider || "anthropic";
+  if (modelEl) sess.model = modelEl.value;
+  if (provEl) sess.provider = provEl.dataset.provider || "anthropic";
   // Always keep the workflow identity fresh
   if (!sess.workflowId) {
     const { name } = _detectWorkflowIdentity();
@@ -774,8 +869,10 @@ function _applySession(sessionId) {
   // Rebuild chat log
   clearAgentLog();
   for (const msg of _chatHistory) {
-    appendAgentLog({ event_type: msg.role === "user" ? "user" : "assistant_done",
-                     content: msg.content, timestamp: Date.now() / 1000 });
+    appendAgentLog({
+      event_type: msg.role === "user" ? "user" : "assistant_done",
+      content: msg.content, timestamp: Date.now() / 1000
+    });
   }
 }
 
@@ -794,7 +891,7 @@ function _newSession(nameHint = "") {
   // Count existing sessions for this workflow to number the new one
   const existing = _sessions.filter(s => _isSameWorkflow(s.workflowId || "", wfId)).length;
   const phaseNames = ["Early draft", "Refinements", "New features", "Debug", "Experiments"];
-  const phaseName  = phaseNames[existing] || `Phase ${existing + 1}`;
+  const phaseName = phaseNames[existing] || `Phase ${existing + 1}`;
   const defaultName = nameHint || (
     wfId && wfId !== "workflow"
       ? `${wfId.slice(0, 14)} · ${phaseName}`
@@ -844,7 +941,7 @@ function _renderSessionTabs() {
   _sessions.forEach((sess, idx) => {
     // Defensive: ensure name is always a string at render time.
     if (typeof sess.name !== "string" || !sess.name) sess.name = `Session ${idx + 1}`;
-    const isActive  = sess.id === _activeSessionId;
+    const isActive = sess.id === _activeSessionId;
     // Mismatch: session was linked to a different workflow than current canvas
     const hasMismatch = sess.workflowId
       && !sess.workflowId.startsWith("workflow-")   // not a hash (hash changes often)
@@ -910,7 +1007,7 @@ function _renderSessionTabs() {
 
   // Scroll active tab into view
   const active = bar.querySelector(`[data-session-id="${_activeSessionId}"]`);
-  active?.scrollIntoView?.({ block:"nearest", inline:"nearest" });
+  active?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
 }
 
 /**
@@ -967,7 +1064,7 @@ function _updateWorkflowContextBar(currentWfId) {
     // Preferred home: top of the Generate slot (sibling of #comfyclaw-gen-body).
     // Falls back to inside the controls body if the slot hasn't been built yet.
     const genBody = document.getElementById("comfyclaw-gen-body");
-    const slot    = genBody?.parentElement;
+    const slot = genBody?.parentElement;
     if (!genBody) return;
     bar = document.createElement("div");
     bar.id = "cc-wf-context-bar";
@@ -984,14 +1081,14 @@ function _updateWorkflowContextBar(currentWfId) {
     // Re-home the bar if augmentation moved gen-body into a new slot after
     // the bar was first created in the controls body.
     const genBody = document.getElementById("comfyclaw-gen-body");
-    const slot    = genBody?.parentElement;
+    const slot = genBody?.parentElement;
     if (slot && bar.parentElement !== slot) slot.insertBefore(bar, genBody);
   }
 
   const sess = _activeSession();
   const sessWf = sess?.workflowId || "";
   const mismatch = sessWf && !sessWf.startsWith("workflow-")
-                 && !_isSameWorkflow(sessWf, currentWfId);
+    && !_isSameWorkflow(sessWf, currentWfId);
 
   if (!sessWf && currentWfId === "workflow") {
     bar.style.display = "none";
@@ -1011,7 +1108,7 @@ function _updateWorkflowContextBar(currentWfId) {
               style="padding:2px 8px;border:1px solid var(--cc-accent-green);border-radius:5px;
                      background:transparent;color:var(--cc-accent-green);cursor:pointer;font-size:10px;
                      font-weight:600;flex-shrink:0;white-space:nowrap;">
-        Open ${escHtml(sessWf.length > 16 ? sessWf.slice(0,16)+"…" : sessWf)}
+        Open ${escHtml(sessWf.length > 16 ? sessWf.slice(0, 16) + "…" : sessWf)}
       </button>
       <button id="cc-wf-link-btn" title="Re-link this session to the current canvas"
               style="padding:2px 8px;border:1px solid var(--cc-border);border-radius:5px;
@@ -1059,8 +1156,8 @@ function _updateWorkflowContextBar(currentWfId) {
     });
   } else {
     // Matched (or unbound) — show a subtle context line + sibling session count.
-    const displayId  = sessWf || currentWfId;
-    const siblings   = _sessionsForWorkflow(displayId).filter(s => s.id !== sess?.id);
+    const displayId = sessWf || currentWfId;
+    const siblings = _sessionsForWorkflow(displayId).filter(s => s.id !== sess?.id);
     const siblingTip = siblings.length
       ? `${siblings.length} other session${siblings.length > 1 ? "s" : ""} on this workflow: ${siblings.map(s => s.name).join(", ")}`
       : "Only session on this workflow";
@@ -1075,7 +1172,7 @@ function _updateWorkflowContextBar(currentWfId) {
       <span style="color:var(--cc-fg-dim); font-size:10px;flex-shrink:0;">🗂</span>
       <span style="flex:1;color:var(--cc-fg-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
             title="Canvas: ${escHtml(currentWfId)}">
-        ${escHtml(displayId.length > 28 ? displayId.slice(0,28)+"…" : displayId)}
+        ${escHtml(displayId.length > 28 ? displayId.slice(0, 28) + "…" : displayId)}
       </span>
       ${siblingBadge}
       <button id="cc-wf-relink-btn" title="Re-link to a different workflow name"
@@ -1101,7 +1198,7 @@ const _PROV_SETTINGS_KEY = "comfyclaw_provider_cfg";
 
 let _providerSettings = (() => {
   try { return JSON.parse(localStorage.getItem(_PROV_SETTINGS_KEY)) || {}; }
-  catch(_) { return {}; }
+  catch (_) { return {}; }
 })();
 
 // Server-reported availability of each provider's env-var (filled by the
@@ -1196,7 +1293,7 @@ function _activeProvPayload() {
   const stateEl = document.getElementById("comfyclaw-provider-state");
   const key = stateEl?.dataset.provider || "anthropic";
   return {
-    api_key:  _getPS(key, "apiKey")  || undefined,
+    api_key: _getPS(key, "apiKey") || undefined,
     api_base: _getPS(key, "baseUrl") || undefined,
   };
 }
@@ -1224,7 +1321,7 @@ function _refreshProvDots() {
     // Settings → Providers — but the visual cue makes "no key" obvious.
     btn.disabled = !usable;
     btn.style.opacity = usable ? "1" : "0.45";
-    btn.style.cursor  = usable ? "pointer" : "not-allowed";
+    btn.style.cursor = usable ? "pointer" : "not-allowed";
 
     // Tooltip that explains *why* a button is on/off.  Helpful for
     // debugging "I added my key, why isn't it green yet?" confusion.
@@ -1262,7 +1359,7 @@ function _refreshProvDots() {
 // Settings modal
 // ─────────────────────────────────────────────────────────────────────────────
 
-function escHtml(s) { const d=document.createElement("div"); d.textContent=s; return d.innerHTML; }
+function escHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 function escAttr(s) { return escHtml(s).replace(/"/g, "&quot;"); }
 
 function _settingsInputStyle(extra = "") {
@@ -1367,16 +1464,16 @@ function createSettingsModal() {
     _activeSettingsTab = tab;
     box.querySelectorAll(".cc-stab").forEach(b => {
       const on = b.dataset.tab === tab;
-      b.style.color         = on ? "#cba6f7" : "#585b70";
-      b.style.borderBottom  = on ? "2px solid #cba6f7" : "2px solid transparent";
-      b.style.background    = "transparent";
+      b.style.color = on ? "#cba6f7" : "#585b70";
+      b.style.borderBottom = on ? "2px solid #cba6f7" : "2px solid transparent";
+      b.style.background = "transparent";
     });
     const content = box.querySelector("#cc-stg-content");
-    if (tab === "agents")          _renderAgentsTab(content);
-    else if (tab === "providers")  _renderProvidersTab(content);
+    if (tab === "agents") _renderAgentsTab(content);
+    else if (tab === "providers") _renderProvidersTab(content);
     else if (tab === "connection") _renderConnectionTab(content);
     else if (tab === "appearance") _renderAppearanceTab(content);
-    else                           _renderDefaultsTab(content);
+    else _renderDefaultsTab(content);
   }
 
   box.querySelectorAll(".cc-stab").forEach(b => b.addEventListener("click", () => _activateTab(b.dataset.tab)));
@@ -1404,15 +1501,15 @@ function createSettingsModal() {
 
     const curId = bridge.activeId();
     const items = Object.entries(bridge.BACKEND_META).map(([id, meta]) => {
-      const st       = bridge.statusOf(id) || { state: "ok", detail: "" };
-      const state    = st.state || "ok";
+      const st = bridge.statusOf(id) || { state: "ok", detail: "" };
+      const state = st.state || "ok";
       const isActive = id === curId;
 
       // Connection summary.
       const connected = state === "ok";
-      const dotColor  = connected ? "#a6e3a1" : "#585b70";
-      let badge       = "Connected";
-      let badgeColor  = "#a6e3a1";
+      const dotColor = connected ? "#a6e3a1" : "#585b70";
+      let badge = "Connected";
+      let badgeColor = "#a6e3a1";
       if (state === "needs_install") { badge = "Not installed"; badgeColor = "#f38ba8"; }
       else if (state === "needs_auth") { badge = "Not signed in"; badgeColor = "#f9e2af"; }
       else if (state === "unsupported") { badge = "Unavailable on this host"; badgeColor = "#585b70"; }
@@ -1531,7 +1628,7 @@ function createSettingsModal() {
         cursor:pointer; font-size:11px;`;
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
-        const id     = btn.dataset.be;
+        const id = btn.dataset.be;
         const action = btn.dataset.action;
         if (action === "activate") {
           bridge.setActive(id);
@@ -1563,17 +1660,17 @@ function createSettingsModal() {
     // appended at the bottom of this tab.
     const providerCards = Object.entries(PROVIDERS).filter(([key]) => key !== "custom");
     const providerCardsHtml = providerCards.map(([key, prov]) => {
-      const apiKey   = escAttr(_getPS(key, "apiKey"));
-      const baseUrl  = escAttr(_getPS(key, "baseUrl"));
-      const hasKey   = !!_getPS(key, "apiKey");
+      const apiKey = escAttr(_getPS(key, "apiKey"));
+      const baseUrl = escAttr(_getPS(key, "baseUrl"));
+      const hasKey = !!_getPS(key, "apiKey");
       const onServer = !!_serverProvKeys.providers?.[key];
       const wildcards = _serverProvKeys.wildcards || [];
-      const usable   = hasKey || onServer || key === "ollama" || wildcards.length > 0;
+      const usable = hasKey || onServer || key === "ollama" || wildcards.length > 0;
 
       // Build a status line that matches what the LiteLLM provider bar is
       // actually doing.  Same priority order as _isProviderUsable.
       let dotColor = "#45475a";
-      let label    = "Not configured";
+      let label = "Not configured";
       let labelClr = "#585b70";
       if (hasKey) {
         dotColor = "#a6e3a1"; labelClr = "#a6e3a1";
@@ -1643,8 +1740,8 @@ function createSettingsModal() {
            or an exotic route (e.g. MiniMax via OpenRouter).
          </div>`
       : _customModels.map((m) => {
-          const tabLabel = PROVIDERS[m.tab]?.label || "Custom";
-          return `
+        const tabLabel = PROVIDERS[m.tab]?.label || "Custom";
+        return `
             <div class="cc-custom-row" data-cm-id="${escAttr(m.id)}"
                  style="display:flex; align-items:center; gap:8px;
                         padding:8px 10px; margin-bottom:6px;
@@ -1686,7 +1783,7 @@ function createSettingsModal() {
               </button>
             </div>
           `;
-        }).join("");
+      }).join("");
 
     const customSectionHtml = `
       <div id="cc-custom-models-section"
@@ -1747,13 +1844,13 @@ function createSettingsModal() {
     // priority order as ``_isProviderUsable``.  Pulled out so we can refresh
     // just one row inline without losing input focus.
     const _statusForProvider = (pkey) => {
-      const hasKey   = !!_getPS(pkey, "apiKey");
+      const hasKey = !!_getPS(pkey, "apiKey");
       const onServer = !!_serverProvKeys.providers?.[pkey];
-      const wcs      = _serverProvKeys.wildcards || [];
-      if (hasKey)            return { dot: "#a6e3a1", clr: "#a6e3a1", text: "Key configured in panel" };
-      if (onServer)          return { dot: "#a6e3a1", clr: "#a6e3a1", text: "Key found in server env" };
+      const wcs = _serverProvKeys.wildcards || [];
+      if (hasKey) return { dot: "#a6e3a1", clr: "#a6e3a1", text: "Key configured in panel" };
+      if (onServer) return { dot: "#a6e3a1", clr: "#a6e3a1", text: "Key found in server env" };
       if (pkey === "ollama") return { dot: "#a6e3a1", clr: "#a6e3a1", text: "Local — no key required" };
-      if (wcs.length > 0)    return { dot: "#74c7ec", clr: "#74c7ec", text: `Routed via ${wcs.join(" / ")} (wildcard)` };
+      if (wcs.length > 0) return { dot: "#74c7ec", clr: "#74c7ec", text: `Routed via ${wcs.join(" / ")} (wildcard)` };
       return { dot: "#45475a", clr: "#585b70", text: "No key — set one below or in the server's .env" };
     };
 
@@ -1767,8 +1864,8 @@ function createSettingsModal() {
         if (dot) dot.style.background = st.dot;
         if (lbl) { lbl.style.color = st.clr; lbl.textContent = st.text; }
       });
-      inp.addEventListener("focus",  () => { inp.style.borderColor = "#cba6f7"; });
-      inp.addEventListener("blur",   () => { inp.style.borderColor = "#45475a"; });
+      inp.addEventListener("focus", () => { inp.style.borderColor = "#cba6f7"; });
+      inp.addEventListener("blur", () => { inp.style.borderColor = "#45475a"; });
     });
     // Eye toggle
     container.querySelectorAll(".cc-eye").forEach(btn => {
@@ -1789,20 +1886,20 @@ function createSettingsModal() {
       _renderProvidersTab(container); // refresh the list above
     };
 
-    const idEl    = container.querySelector("#cc-custom-id");
-    const lblEl   = container.querySelector("#cc-custom-label");
-    const tabEl   = container.querySelector("#cc-custom-tab");
-    const addBtn  = container.querySelector("#cc-custom-add");
+    const idEl = container.querySelector("#cc-custom-id");
+    const lblEl = container.querySelector("#cc-custom-label");
+    const tabEl = container.querySelector("#cc-custom-tab");
+    const addBtn = container.querySelector("#cc-custom-add");
 
     // Auto-pick the tab from the LiteLLM prefix the user is typing.
     // Map of well-known prefixes → tab key.  Anything unrecognised falls
     // through to the "custom" catch-all.
     const PREFIX_TO_TAB = {
       anthropic: "anthropic",
-      openai:    "openai",
-      gemini:    "google",
-      google:    "google",
-      ollama:    "ollama",
+      openai: "openai",
+      gemini: "google",
+      google: "google",
+      ollama: "ollama",
     };
     let _userTouchedTab = false;
     tabEl?.addEventListener("change", () => { _userTouchedTab = true; });
@@ -1817,7 +1914,7 @@ function createSettingsModal() {
     });
 
     const submitAdd = () => {
-      const id  = (idEl?.value  || "").trim();
+      const id = (idEl?.value || "").trim();
       const lbl = (lblEl?.value || "").trim() || id;
       const tab = (tabEl?.value || "custom").trim();
       if (!id) {
@@ -1880,7 +1977,7 @@ function createSettingsModal() {
 
   // ── Connection tab ───────────────────────────────────────────────────────────
   function _renderConnectionTab(container) {
-    const wsUrl    = escAttr(localStorage.getItem("comfyclaw_ws_url") || DEFAULT_WS_URL);
+    const wsUrl = escAttr(localStorage.getItem("comfyclaw_ws_url") || DEFAULT_WS_URL);
     const comfyUrl = escAttr(localStorage.getItem("comfyclaw_comfyui_addr") || "127.0.0.1:8000");
     container.innerHTML = `
       <div style="margin-bottom:16px;">
@@ -1902,8 +1999,8 @@ function createSettingsModal() {
       </div>
     `;
     container.querySelectorAll("input").forEach(inp => {
-      inp.addEventListener("focus",  () => inp.style.borderColor = "#cba6f7");
-      inp.addEventListener("blur",   () => inp.style.borderColor = "#45475a");
+      inp.addEventListener("focus", () => inp.style.borderColor = "#cba6f7");
+      inp.addEventListener("blur", () => inp.style.borderColor = "#45475a");
     });
     container.querySelector("#cc-conn-ws")?.addEventListener("change", e => {
       const val = e.target.value.trim();
@@ -1917,23 +2014,23 @@ function createSettingsModal() {
   // ── Defaults tab ─────────────────────────────────────────────────────────────
   function _renderAppearanceTab(container) {
     const theme = localStorage.getItem("comfyclaw_theme") || "dark";
-    const dock  = localStorage.getItem("comfyclaw_dock_mode") || "comfy-sidebar";
+    const dock = localStorage.getItem("comfyclaw_dock_mode") || "comfy-sidebar";
     const selectStyle = _settingsInputStyle("cursor:pointer;");
     container.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:14px;">
         <div>
           <label style="${_settingsLabelStyle()}">Theme</label>
           <select id="cc-stg-theme" style="${selectStyle}">
-            <option value="dark"  ${theme==="dark"  ? "selected":""}>🌙 Dark</option>
-            <option value="light" ${theme==="light" ? "selected":""}>☀ Light</option>
+            <option value="dark"  ${theme === "dark" ? "selected" : ""}>🌙 Dark</option>
+            <option value="light" ${theme === "light" ? "selected" : ""}>☀ Light</option>
           </select>
         </div>
         <div>
           <label style="${_settingsLabelStyle()}">Panel position</label>
           <select id="cc-stg-dock" style="${selectStyle}">
-            <option value="comfy-sidebar" ${dock==="comfy-sidebar" ? "selected":""}>Inside ComfyUI sidebar (recommended)</option>
-            <option value="sidebar"       ${dock==="sidebar"       ? "selected":""}>Right-rail dock</option>
-            <option value="float"         ${dock==="float"         ? "selected":""}>Floating widget</option>
+            <option value="comfy-sidebar" ${dock === "comfy-sidebar" ? "selected" : ""}>Inside ComfyUI sidebar (recommended)</option>
+            <option value="sidebar"       ${dock === "sidebar" ? "selected" : ""}>Right-rail dock</option>
+            <option value="float"         ${dock === "float" ? "selected" : ""}>Floating widget</option>
           </select>
           <p style="margin:4px 0 0; font-size:11px; color:#585b70;">
             Inside ComfyUI sidebar: mounts as a native tab. Right-rail: pinned
@@ -1958,10 +2055,10 @@ function createSettingsModal() {
   }
 
   function _renderDefaultsTab(container) {
-    const iters    = localStorage.getItem("comfyclaw-gen-iters")    || "3";
-    const opDelay  = localStorage.getItem("comfyclaw-gen-opdelay")  || "400";
+    const iters = localStorage.getItem("comfyclaw-gen-iters") || "3";
+    const opDelay = localStorage.getItem("comfyclaw-gen-opdelay") || "400";
     const verifier = localStorage.getItem("comfyclaw-gen-verifier") || "vlm";
-    const vmodel   = localStorage.getItem("comfyclaw-gen-vmodel")   || "";
+    const vmodel = localStorage.getItem("comfyclaw-gen-vmodel") || "";
 
     const selectStyle = _settingsInputStyle("cursor:pointer;");
     container.innerHTML = `
@@ -1977,18 +2074,18 @@ function createSettingsModal() {
         <div>
           <label style="${_settingsLabelStyle()}">Default Verifier Mode</label>
           <select id="cc-def-verifier" style="${selectStyle}">
-            <option value="vlm"    ${verifier==="vlm"    ? "selected":""}>VLM (automatic)</option>
-            <option value="human"  ${verifier==="human"  ? "selected":""}>Human-in-the-loop</option>
-            <option value="hybrid" ${verifier==="hybrid" ? "selected":""}>Hybrid</option>
+            <option value="vlm"    ${verifier === "vlm" ? "selected" : ""}>VLM (automatic)</option>
+            <option value="human"  ${verifier === "human" ? "selected" : ""}>Human-in-the-loop</option>
+            <option value="hybrid" ${verifier === "hybrid" ? "selected" : ""}>Hybrid</option>
           </select>
         </div>
         <div>
           <label style="${_settingsLabelStyle()}">Default Verifier Model</label>
           <select id="cc-def-vmodel" style="${selectStyle}">
-            <option value=""                               ${!vmodel ? "selected":""}>Same as Agent model</option>
-            <option value="anthropic/claude-sonnet-4-5"   ${vmodel==="anthropic/claude-sonnet-4-5"   ? "selected":""}>Claude Sonnet 4.5</option>
-            <option value="openai/gpt-5.4"                ${vmodel==="openai/gpt-5.4"                ? "selected":""}>GPT-5.4</option>
-            <option value="gemini/gemini-2.5-flash"       ${vmodel==="gemini/gemini-2.5-flash"       ? "selected":""}>Gemini 2.5 Flash</option>
+            <option value=""                               ${!vmodel ? "selected" : ""}>Same as Agent model</option>
+            <option value="anthropic/claude-sonnet-4-5"   ${vmodel === "anthropic/claude-sonnet-4-5" ? "selected" : ""}>Claude Sonnet 4.5</option>
+            <option value="openai/gpt-5.4"                ${vmodel === "openai/gpt-5.4" ? "selected" : ""}>GPT-5.4</option>
+            <option value="gemini/gemini-2.5-flash"       ${vmodel === "gemini/gemini-2.5-flash" ? "selected" : ""}>Gemini 2.5 Flash</option>
           </select>
         </div>
         <div>
@@ -2007,7 +2104,7 @@ function createSettingsModal() {
       const el = container.querySelector(id);
       if (!el) return;
       el.addEventListener("focus", () => el.style.borderColor = "#cba6f7");
-      el.addEventListener("blur",  () => el.style.borderColor = "#45475a");
+      el.addEventListener("blur", () => el.style.borderColor = "#45475a");
       el.addEventListener("change", () => {
         const v = el.value;
         localStorage.setItem(lsKey, v);
@@ -2017,10 +2114,10 @@ function createSettingsModal() {
           localStorage.setItem("comfyclaw_op_delay", v);
       });
     };
-    sync("#cc-def-iters",    "comfyclaw-gen-iters",    "comfyclaw-gen-iters");
-    sync("#cc-def-verifier", "comfyclaw-gen-verifier",  "comfyclaw-gen-verifier");
-    sync("#cc-def-vmodel",   "comfyclaw-gen-vmodel",    "comfyclaw-gen-vmodel");
-    sync("#cc-def-opdelay",  "comfyclaw-gen-opdelay",   "comfyclaw-gen-opdelay");
+    sync("#cc-def-iters", "comfyclaw-gen-iters", "comfyclaw-gen-iters");
+    sync("#cc-def-verifier", "comfyclaw-gen-verifier", "comfyclaw-gen-verifier");
+    sync("#cc-def-vmodel", "comfyclaw-gen-vmodel", "comfyclaw-gen-vmodel");
+    sync("#cc-def-opdelay", "comfyclaw-gen-opdelay", "comfyclaw-gen-opdelay");
   }
 
   // Public
@@ -2070,18 +2167,26 @@ function _updateConnDot(state, countdown = 0) {
   const dot = document.getElementById("cc-conn-dot");
   if (!dot) return;
   const cfg = {
-    connected:    { color:"var(--cc-accent-green)",  halo:"rgba(166,227,161,0.22)",
-                    title:"Connected",   anim:"" },
-    connecting:   { color:"var(--cc-accent-yellow)", halo:"rgba(249,226,175,0.22)",
-                    title:"Connecting…", anim:"cc-pulse" },
-    reconnecting: { color:"var(--cc-accent-orange)", halo:"rgba(250,179,135,0.22)",
-                    title:`Reconnecting in ${countdown}s…`, anim:"cc-pulse" },
-    disconnected: { color:"var(--cc-accent-red)",    halo:"rgba(243,139,168,0.22)",
-                    title:"Disconnected — click to retry", anim:"" },
+    connected: {
+      color: "var(--cc-accent-green)", halo: "rgba(166,227,161,0.22)",
+      title: "Connected", anim: ""
+    },
+    connecting: {
+      color: "var(--cc-accent-yellow)", halo: "rgba(249,226,175,0.22)",
+      title: "Connecting…", anim: "cc-pulse"
+    },
+    reconnecting: {
+      color: "var(--cc-accent-orange)", halo: "rgba(250,179,135,0.22)",
+      title: `Reconnecting in ${countdown}s…`, anim: "cc-pulse"
+    },
+    disconnected: {
+      color: "var(--cc-accent-red)", halo: "rgba(243,139,168,0.22)",
+      title: "Disconnected — click to retry", anim: ""
+    },
   };
   const c = cfg[state] || cfg.disconnected;
   dot.style.background = c.color;
-  dot.style.boxShadow  = `0 0 0 2px ${c.halo}`;
+  dot.style.boxShadow = `0 0 0 2px ${c.halo}`;
   const baseTitle = countdown > 0 ? `Reconnecting in ${countdown}s…` : c.title;
   dot.dataset.baseTitle = baseTitle;
   dot.title = _nodeCount > 0 ? `${baseTitle} · ${_nodeCount} nodes` : baseTitle;
@@ -2136,10 +2241,10 @@ function _setActiveProvider(key, updateSession = true) {
   document.querySelectorAll(".cc-provider-btn").forEach(btn => {
     const isActive = btn.dataset.key === key;
     const c = PROVIDERS[btn.dataset.key]?.color || "#45475a";
-    btn.style.borderColor  = isActive ? c : "#45475a";
-    btn.style.background   = isActive ? c + "22" : "transparent";
-    btn.style.color        = isActive ? c : "#585b70";
-    btn.style.fontWeight   = isActive ? "700" : "500";
+    btn.style.borderColor = isActive ? c : "#45475a";
+    btn.style.background = isActive ? c + "22" : "transparent";
+    btn.style.color = isActive ? c : "#585b70";
+    btn.style.fontWeight = isActive ? "700" : "500";
   });
   // Populate model dropdown — built-ins first, then any user-defined
   // entries assigned to this tab (rendered with a ✨ prefix so the user
@@ -2181,7 +2286,7 @@ function renderMarkdown(raw) {
     blocks.push(
       `<div class="cc-code-block" style="position:relative;margin:6px 0;">`
       + (langLabel ? `<div style="padding:4px 10px 2px;background:var(--cc-surface);border-radius:6px 6px 0 0;">${langLabel}</div>` : "")
-      + `<pre style="background:var(--cc-surface-2);border-radius:${lang?"0 0 6px 6px":"6px"};padding:8px 10px;color:var(--cc-fg);`
+      + `<pre style="background:var(--cc-surface-2);border-radius:${lang ? "0 0 6px 6px" : "6px"};padding:8px 10px;color:var(--cc-fg);`
       + `overflow-x:auto;margin:0;font-size:11px;line-height:1.5;">`
       + `<code style="font-family:monospace;">${escaped}</code></pre>`
       + `<button class="cc-copy-btn" data-b64="${raw64}">Copy</button>`
@@ -2235,48 +2340,48 @@ function renderMarkdown(raw) {
 // Unified ComfyClaw panel  (controls + chat/log in one draggable widget)
 // ─────────────────────────────────────────────────────────────────────────────
 
-let _clawPanel        = null;
-let _thinkingPanel    = null;   // alias — always same as _clawPanel
+let _clawPanel = null;
+let _thinkingPanel = null;   // alias — always same as _clawPanel
 let _clawPanelRunning = false;
-let _thinkingEntries  = [];
+let _thinkingEntries = [];
 const MAX_LOG_ENTRIES = 200;
 
 // Per-event coloring for the agent log.  Colors flow through CSS variables
 // so the design tokens in styles.js stay the single source of truth.
 const EVENT_STYLES = {
-  strategy:         { icon: "🧠", color: "var(--cc-accent)",        label: "Strategy"   },
-  tool_call:        { icon: "🔧", color: "var(--cc-accent-blue)",   label: "Tool Call"  },
-  tool_result:      { icon: "📋", color: "var(--cc-fg-muted)",      label: "Result"     },
-  thinking:         { icon: "💭", color: "var(--cc-accent-yellow)", label: "Thinking"   },
-  validation:       { icon: "✓",  color: "var(--cc-accent-green)",  label: "Validation" },
-  error:            { icon: "❌", color: "var(--cc-accent-red)",    label: "Error"      },
-  info:             { icon: "ℹ",  color: "var(--cc-accent-blue)",   label: "Info"       },
-  user:             { icon: "👤", color: "var(--cc-accent-orange)", label: "You"        },
-  assistant_stream: { icon: "🤖", color: "var(--cc-accent-green)",  label: "ComfyClaw"  },
-  assistant_done:   { icon: "🤖", color: "var(--cc-accent-green)",  label: "ComfyClaw"  },
+  strategy: { icon: "🧠", color: "var(--cc-accent)", label: "Strategy" },
+  tool_call: { icon: "🔧", color: "var(--cc-accent-blue)", label: "Tool Call" },
+  tool_result: { icon: "📋", color: "var(--cc-fg-muted)", label: "Result" },
+  thinking: { icon: "💭", color: "var(--cc-accent-yellow)", label: "Thinking" },
+  validation: { icon: "✓", color: "var(--cc-accent-green)", label: "Validation" },
+  error: { icon: "❌", color: "var(--cc-accent-red)", label: "Error" },
+  info: { icon: "ℹ", color: "var(--cc-accent-blue)", label: "Info" },
+  user: { icon: "👤", color: "var(--cc-accent-orange)", label: "You" },
+  assistant_stream: { icon: "🤖", color: "var(--cc-accent-green)", label: "ComfyClaw" },
+  assistant_done: { icon: "🤖", color: "var(--cc-accent-green)", label: "ComfyClaw" },
 };
 
 function createComfyClawPanel() {
   const panel = document.createElement("div");
   panel.id = "comfyclaw-panel";
   Object.assign(panel.style, {
-    position:      "fixed",
-    top:           "60px",
-    right:         "12px",
-    width:         "400px",
-    maxHeight:     "88vh",
-    zIndex:        "9998",
-    background:    "var(--cc-bg)",
-    color:         "var(--cc-fg)",
-    borderRadius:  "var(--cc-radius)",
-    boxShadow:     "var(--cc-shadow)",
-    border:        "1px solid var(--cc-border)",
-    fontFamily:    "system-ui, -apple-system, sans-serif",
-    fontSize:      "13px",
-    lineHeight:    "1.5",
-    display:       "flex",
+    position: "fixed",
+    top: "60px",
+    right: "12px",
+    width: "400px",
+    maxHeight: "88vh",
+    zIndex: "9998",
+    background: "var(--cc-bg)",
+    color: "var(--cc-fg)",
+    borderRadius: "var(--cc-radius)",
+    boxShadow: "var(--cc-shadow)",
+    border: "1px solid var(--cc-border)",
+    fontFamily: "system-ui, -apple-system, sans-serif",
+    fontSize: "13px",
+    lineHeight: "1.5",
+    display: "flex",
     flexDirection: "column",
-    overflow:      "hidden",
+    overflow: "hidden",
   });
 
   panel.innerHTML = `
@@ -2484,9 +2589,9 @@ function createComfyClawPanel() {
         <!-- Scroll-to-bottom button -->
         <button id="cc-scroll-bottom" title="Scroll to bottom"
                 style="position:absolute; bottom:10px; right:12px;
-                       width:28px; height:28px; border-radius:50%;
+                       width:32px; height:32px; border-radius:50%;
                        background:var(--cc-surface-2); border:1px solid var(--cc-border);
-                       color:var(--cc-fg); cursor:pointer; font-size:13px;
+                       color:var(--cc-fg); cursor:pointer; font-size:16px;
                        display:none; align-items:center; justify-content:center;
                        box-shadow:var(--cc-shadow-sm); z-index:2;
                        transition:transform 0.15s, background 0.15s;">↓</button>
@@ -2523,7 +2628,7 @@ function createComfyClawPanel() {
             </button>
             <button id="cc-composer-audit" class="cc-composer-btn"
                     title="Audit current workflow"
-                    style="width:auto;padding:0 8px;font-size:11px;">🔍</button>
+                    style="width:auto;padding:0 10px;font-size:14px;">🔍</button>
             <div style="flex:1;"></div>
             <button id="cc-composer-run" class="cc-composer-btn cc-composer-btn-run"
                     title="Run generation with this prompt">▶</button>
@@ -2610,7 +2715,7 @@ function createComfyClawPanel() {
   });
 
   // ── Scroll-to-bottom button ───────────────────────────────────────────────────
-  const logEl2    = panel.querySelector("#comfyclaw-think-log");
+  const logEl2 = panel.querySelector("#comfyclaw-think-log");
   const scrollBtn = panel.querySelector("#cc-scroll-bottom");
   if (logEl2 && scrollBtn) {
     logEl2.addEventListener("scroll", () => {
@@ -2624,12 +2729,12 @@ function createComfyClawPanel() {
 
   // ── Quick-prompt chips ────────────────────────────────────────────────────────
   const QUICK_PROMPTS = [
-    { label:"📷 Text→Image",  text:"A cinematic photo of a cat wearing sunglasses, golden hour, photorealistic" },
-    { label:"🖼 Img→Img",     text:"Improve the composition and lighting of the current workflow" },
-    { label:"🎨 Add LoRA",    text:"Add a LoRA loader node and connect it to the model, keep everything else intact" },
-    { label:"🔍 Debug",       text:"Find and explain any errors or missing connections in the workflow" },
-    { label:"⚡ SDXL",        text:"Build a standard SDXL text-to-image workflow with DPM++ 2M Karras sampler" },
-    { label:"🎬 AnimateDiff", text:"Create an AnimateDiff video generation workflow with motion module" },
+    { label: "📷 Text→Image", text: "A cinematic photo of a cat wearing sunglasses, golden hour, photorealistic" },
+    { label: "🖼 Img→Img", text: "Improve the composition and lighting of the current workflow" },
+    { label: "🎨 Add LoRA", text: "Add a LoRA loader node and connect it to the model, keep everything else intact" },
+    { label: "🔍 Debug", text: "Find and explain any errors or missing connections in the workflow" },
+    { label: "⚡ SDXL", text: "Build a standard SDXL text-to-image workflow with DPM++ 2M Karras sampler" },
+    { label: "🎬 AnimateDiff", text: "Create an AnimateDiff video generation workflow with motion module" },
   ];
   const chipsBar = panel.querySelector("#cc-quick-prompts");
   const promptTA = panel.querySelector("#comfyclaw-gen-prompt");
@@ -2640,7 +2745,7 @@ function createComfyClawPanel() {
       chip.textContent = qp.label;
       chip.title = qp.text;
       chip.style.fontSize = "10px";
-      chip.style.padding  = "3px 8px";
+      chip.style.padding = "3px 8px";
       chip.addEventListener("click", () => {
         promptTA.value = qp.text;
         promptTA.focus();
@@ -2675,8 +2780,8 @@ function createComfyClawPanel() {
     modeContainer.querySelectorAll(".comfyclaw-mode-btn").forEach((b) => {
       const active = b.dataset.mode === selectedMode;
       b.style.borderColor = active ? "var(--cc-accent)" : "var(--cc-border)";
-      b.style.background  = active ? "rgba(203,166,247,0.13)" : "var(--cc-surface-2)";
-      b.style.color       = active ? "var(--cc-accent)" : "var(--cc-fg)";
+      b.style.background = active ? "rgba(203,166,247,0.13)" : "var(--cc-surface-2)";
+      b.style.color = active ? "var(--cc-accent)" : "var(--cc-fg)";
     });
   }
   modeContainer.querySelectorAll(".comfyclaw-mode-btn").forEach((btn) => {
@@ -2710,7 +2815,7 @@ function createComfyClawPanel() {
   // The button always shows "▾" and we rotate it 180° when collapsed so the
   // affordance reads as a single chevron flipping, not a glyph swap.
   const ctrlSection = panel.querySelector("#comfyclaw-gen-body");
-  const ctrlToggle  = panel.querySelector("#comfyclaw-ctrl-toggle");
+  const ctrlToggle = panel.querySelector("#comfyclaw-ctrl-toggle");
   let ctrlCollapsed = false;
   function _paintCtrl() {
     ctrlSection.style.display = ctrlCollapsed ? "none" : "";
@@ -2785,7 +2890,7 @@ function createComfyClawPanel() {
             st.toggleSidebarTab("comfyclaw");
           }
         }
-      } catch (_) {}
+      } catch (_) { }
       if (dockBtn) { dockBtn.textContent = "⬒"; dockBtn.title = "Detach (cycle: sidebar → floating → right-rail)"; }
       return;
     }
@@ -2814,9 +2919,9 @@ function createComfyClawPanel() {
       if (saved?.left && saved?.top) {
         panel.style.right = "auto";
         panel.style.left = saved.left;
-        panel.style.top  = saved.top;
+        panel.style.top = saved.top;
       }
-    } catch (_) {}
+    } catch (_) { }
     header.style.cursor = "grab";
     if (dockBtn) { dockBtn.textContent = "⌸"; dockBtn.title = "Cycle dock (floating → native → right-rail)"; }
   }
@@ -2853,7 +2958,7 @@ function createComfyClawPanel() {
     panel.style.display = visible ? "flex" : "none";
     _edgeHandle.style.display = visible ? "none" : "flex";
     if (visible) localStorage.removeItem("comfyclaw_hidden");
-    else         localStorage.setItem("comfyclaw_hidden", "1");
+    else localStorage.setItem("comfyclaw_hidden", "1");
   }
   _edgeHandle.addEventListener("click", () => _setPanelVisible(true));
   closeBtn?.addEventListener("click", (e) => { e.stopPropagation(); _setPanelVisible(false); });
@@ -2866,8 +2971,10 @@ function createComfyClawPanel() {
     if (e.target.closest("button")) return;
     if (e.button !== 0) return;
     const rect = panel.getBoundingClientRect();
-    _dragState = { startX: e.clientX, startY: e.clientY,
-                   offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top, dragging: false };
+    _dragState = {
+      startX: e.clientX, startY: e.clientY,
+      offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top, dragging: false
+    };
     e.preventDefault();
   });
   document.addEventListener("mousemove", (e) => {
@@ -2877,7 +2984,7 @@ function createComfyClawPanel() {
     header.style.cursor = "grabbing";
     panel.style.right = "auto";
     panel.style.left = Math.max(0, e.clientX - _dragState.offsetX) + "px";
-    panel.style.top  = Math.max(0, e.clientY - _dragState.offsetY) + "px";
+    panel.style.top = Math.max(0, e.clientY - _dragState.offsetY) + "px";
   });
   document.addEventListener("mouseup", () => {
     if (!_dragState) return;
@@ -2889,17 +2996,17 @@ function createComfyClawPanel() {
   });
 
   // ── Persist global settings (non-session) ────────────────────────────────────
-  ["comfyclaw-gen-verifier","comfyclaw-gen-vmodel",
-   "comfyclaw-gen-apikey","comfyclaw-gen-opdelay","comfyclaw-gen-iters"].forEach(id => {
-    const el = panel.querySelector(`#${id}`);
-    if (!el) return;
-    const stored = localStorage.getItem(id);
-    if (stored !== null) el.value = stored;
-    el.addEventListener("change", () => {
-      localStorage.setItem(id, el.value);
-      if (id === "comfyclaw-gen-opdelay") localStorage.setItem("comfyclaw_op_delay", el.value);
+  ["comfyclaw-gen-verifier", "comfyclaw-gen-vmodel",
+    "comfyclaw-gen-apikey", "comfyclaw-gen-opdelay", "comfyclaw-gen-iters"].forEach(id => {
+      const el = panel.querySelector(`#${id}`);
+      if (!el) return;
+      const stored = localStorage.getItem(id);
+      if (stored !== null) el.value = stored;
+      el.addEventListener("change", () => {
+        localStorage.setItem(id, el.value);
+        if (id === "comfyclaw-gen-opdelay") localStorage.setItem("comfyclaw_op_delay", el.value);
+      });
     });
-  });
   // Debug-mode (dry-run) checkbox is persisted separately because it's a bool.
   const _dryEl = panel.querySelector("#comfyclaw-gen-dryrun");
   if (_dryEl) {
@@ -2952,8 +3059,8 @@ function createComfyClawPanel() {
       const rs = _activeSyncClient?.ws?.readyState;
       const stateName = ({
         [WebSocket.CONNECTING]: "still connecting",
-        [WebSocket.CLOSING]:    "closing",
-        [WebSocket.CLOSED]:     "disconnected",
+        [WebSocket.CLOSING]: "closing",
+        [WebSocket.CLOSED]: "disconnected",
       })[rs] || "not connected";
       showToast(
         `ComfyClaw server is ${stateName}. ` +
@@ -2967,7 +3074,7 @@ function createComfyClawPanel() {
     let workflow = selectedMode === "improve" ? await exportCurrentWorkflow() : null;
     const cpWf = workflow || await exportCurrentWorkflow();
     if (cpWf && Object.keys(cpWf).length > 0)
-      _activeSyncClient.ws.send(JSON.stringify({ type:"save_checkpoint", workflow:cpWf, label:`Before: ${prompt.slice(0,40)}` }));
+      _activeSyncClient.ws.send(JSON.stringify({ type: "save_checkpoint", workflow: cpWf, label: `Before: ${prompt.slice(0, 40)}` }));
     // Stamp the session with the current workflow identity at generation time
     const sess = _activeSession();
     if (sess) {
@@ -2980,22 +3087,27 @@ function createComfyClawPanel() {
     const runMode = _modeToggleRef?.value() || "auto";
     const agentBackend = _backendPickerRef?.value() || "litellm";
     const dryRun = !!panel.querySelector("#comfyclaw-gen-dryrun")?.checked;
+    // The agent path (trigger_generation) also needs the per-CLI model
+    // choice so the agent loop talks to the same model the chat does.
+    const _agentModel = _isCliBackend(agentBackend)
+      ? _cliModelFor(agentBackend)
+      : panel.querySelector("#comfyclaw-gen-model").value;
     _activeSyncClient.ws.send(JSON.stringify({
-      type:          "trigger_generation",
+      type: "trigger_generation",
       connection_id: _CONNECTION_ID,
       prompt, mode: selectedMode, workflow,
       settings: {
-        iterations:     runMode === "manual" ? 1 :
-                        (parseInt(panel.querySelector("#comfyclaw-gen-iters").value) || 3),
-        mode:           runMode,
-        run_mode:       runMode,
-        verifier_mode:  panel.querySelector("#comfyclaw-gen-verifier").value,
-        model:          panel.querySelector("#comfyclaw-gen-model").value,
+        iterations: runMode === "manual" ? 1 :
+          (parseInt(panel.querySelector("#comfyclaw-gen-iters").value) || 3),
+        mode: runMode,
+        run_mode: runMode,
+        verifier_mode: panel.querySelector("#comfyclaw-gen-verifier").value,
+        model: _agentModel,
         verifier_model: panel.querySelector("#comfyclaw-gen-vmodel").value,
-        agent_backend:  agentBackend,
-        api_key:        _pp.api_key  || panel.querySelector("#comfyclaw-gen-apikey").value.trim() || undefined,
-        api_base:       _pp.api_base || undefined,
-        dry_run:        dryRun,
+        agent_backend: agentBackend,
+        api_key: _pp.api_key || panel.querySelector("#comfyclaw-gen-apikey").value.trim() || undefined,
+        api_base: _pp.api_base || undefined,
+        dry_run: dryRun,
       },
     }));
     _lastGenState = null;
@@ -3003,7 +3115,7 @@ function createComfyClawPanel() {
     setGenStatus(
       "running",
       dryRun ? `Debug mode (${runMode}) — building workflow only…`
-             : `Waiting for agent (${runMode})…`
+        : `Waiting for agent (${runMode})…`
     );
     clearAgentLog();
     if (_historyTabRef) {
@@ -3024,9 +3136,9 @@ function createComfyClawPanel() {
     const workflow = await exportCurrentWorkflow();
     const _dpp = _activeProvPayload();
     _activeSyncClient.ws.send(JSON.stringify({
-      type:     "debug_workflow", workflow,
-      model:    panel.querySelector("#comfyclaw-gen-model").value.trim() || undefined,
-      api_key:  _dpp.api_key  || panel.querySelector("#comfyclaw-gen-apikey").value.trim() || undefined,
+      type: "debug_workflow", workflow,
+      model: panel.querySelector("#comfyclaw-gen-model").value.trim() || undefined,
+      api_key: _dpp.api_key || panel.querySelector("#comfyclaw-gen-apikey").value.trim() || undefined,
       api_base: _dpp.api_base || undefined,
     }));
     setGenStatus("verifying", "Running debug agent…");
@@ -3037,13 +3149,15 @@ function createComfyClawPanel() {
   panel.querySelector("#comfyclaw-cp-save-btn").addEventListener("click", async () => {
     if (_activeSyncClient?.ws?.readyState !== WebSocket.OPEN) return;
     const wf = await exportCurrentWorkflow();
-    _activeSyncClient.ws.send(JSON.stringify({ type:"save_checkpoint", workflow:wf,
-      label:`Manual — ${new Date().toLocaleTimeString()}` }));
+    _activeSyncClient.ws.send(JSON.stringify({
+      type: "save_checkpoint", workflow: wf,
+      label: `Manual — ${new Date().toLocaleTimeString()}`
+    }));
   });
 
   // ── Chat input (dual-mode: chat when idle, refinement when generating) ────────
   const chatInput = panel.querySelector("#comfyclaw-think-input");
-  const chatSend  = panel.querySelector("#comfyclaw-think-send");
+  const chatSend = panel.querySelector("#comfyclaw-think-send");
 
   function sendFromPanel() {
     const text = chatInput.value.trim();
@@ -3062,14 +3176,21 @@ function createComfyClawPanel() {
       _thinkingChatMsgId = msgId;
       appendAgentLog({ event_type: "assistant_stream", content: "", timestamp: Date.now() / 1000, message_id: msgId });
       const _cpp = _activeProvPayload();
+      const _be = _activeBackendId();
+      // CLI backends carry their own per-backend model id (Claude /
+      // Codex / Gemini); LiteLLM uses the <select>'s value.  Sending
+      // an empty string is fine — the server falls back to its default.
+      const _model = _isCliBackend(_be)
+        ? _cliModelFor(_be)
+        : (panel.querySelector("#comfyclaw-gen-model").value.trim() || undefined);
       _activeSyncClient.ws.send(JSON.stringify({
-        type:          "chat_message",
-        message_id:    msgId,
-        messages:      _chatHistory,
-        model:         panel.querySelector("#comfyclaw-gen-model").value.trim() || undefined,
-        api_key:       _cpp.api_key  || panel.querySelector("#comfyclaw-gen-apikey").value.trim() || undefined,
-        api_base:      _cpp.api_base || undefined,
-        agent_backend: _activeBackendId(),
+        type: "chat_message",
+        message_id: msgId,
+        messages: _chatHistory,
+        model: _model,
+        api_key: _cpp.api_key || panel.querySelector("#comfyclaw-gen-apikey").value.trim() || undefined,
+        api_base: _cpp.api_base || undefined,
+        agent_backend: _be,
       }));
     }
   }
@@ -3085,13 +3206,19 @@ function createComfyClawPanel() {
   });
 
   // ── Composer model chip + popover (Cursor-style inline model picker) ───────
-  const modelChip      = panel.querySelector("#cc-composer-model-chip");
+  const modelChip = panel.querySelector("#cc-composer-model-chip");
   const modelChipLabel = modelChip?.querySelector(".cc-chip-label");
-  const modelChipDot   = modelChip?.querySelector(".cc-chip-dot");
-  const modelSelectEl  = panel.querySelector("#comfyclaw-gen-model");
+  const modelChipDot = modelChip?.querySelector(".cc-chip-dot");
+  const modelSelectEl = panel.querySelector("#comfyclaw-gen-model");
   const providerStateEl = panel.querySelector("#comfyclaw-provider-state");
 
   function _currentModelLabel() {
+    // CLI-backend mode: read the per-backend saved value, regardless
+    // of whatever the LiteLLM <select> currently holds.
+    const beId = _activeBackendId();
+    if (_isCliBackend(beId)) {
+      return _cliModelLabel(beId, _cliModelFor(beId));
+    }
     const v = modelSelectEl?.value || "";
     if (!v) return "Server default";
     // Find the matching label in PROVIDERS.
@@ -3105,8 +3232,14 @@ function createComfyClawPanel() {
     if (!modelChip) return;
     if (modelChipLabel) modelChipLabel.textContent = _currentModelLabel();
     if (modelChipDot) {
-      const provKey = providerStateEl?.dataset?.provider || "anthropic";
-      const c = PROVIDERS[provKey]?.color;
+      const beId = _activeBackendId();
+      let c;
+      if (_isCliBackend(beId)) {
+        c = CLI_MODELS[beId]?.color;
+      } else {
+        const provKey = providerStateEl?.dataset?.provider || "anthropic";
+        c = PROVIDERS[provKey]?.color;
+      }
       modelChipDot.style.background = c || "var(--cc-accent)";
     }
   }
@@ -3125,52 +3258,88 @@ function createComfyClawPanel() {
         _modelPopover.dataset.open = "0";
       });
     }
-    // Rebuild contents fresh.
-    const curVal = modelSelectEl?.value || "";
-    let html = `<div class="cc-popover-item" data-val="" ${curVal === "" ? 'data-active="1"' : ""}>
-                  <span class="cc-popover-icon">·</span>
-                  <span>Server default</span>
-                </div>`;
-    let usableCount = 0;
-    for (const [key, prov] of Object.entries(PROVIDERS)) {
-      const models = _modelsForProvider(key);
-      // Skip empty tabs (chiefly the Custom catch-all when the user
-      // hasn't pinned anything to it yet) so the popover stays tidy.
-      if (models.length === 0) continue;
-      const usable = _isProviderUsable(key);
-      if (usable) usableCount++;
-      const lockSuffix = usable ? "" : " · no key";
-      html += `<div class="cc-popover-section-label" style="color:${prov.color};${usable ? "" : "opacity:0.55;"}">
-                 ${prov.emoji} ${escHtml(prov.label)}${lockSuffix}
+    // The popover renders one of two trees based on the active backend:
+    //
+    //   • CLI backends (Claude Code / Codex / Gemini CLI):
+    //       show that backend's own model list and persist the choice
+    //       in ``_cliModelByBackend`` — these models are bound to the
+    //       user's subscription, not to API keys.
+    //
+    //   • LiteLLM backend:
+    //       show the provider grid (Anthropic / OpenAI / Google / Ollama /
+    //       Custom) gated by which providers have an API key.
+    const beId = _activeBackendId();
+    let html = "";
+    if (_isCliBackend(beId)) {
+      const cli = CLI_MODELS[beId];
+      const curVal = _cliModelFor(beId);
+      html += `<div class="cc-popover-section-label" style="color:${cli.color};">
+                 ${escHtml(cli.label)} models
                </div>`;
-      for (const m of models) {
+      for (const m of cli.models) {
         const active = m.value === curVal;
-        const label = m.custom ? `✨ ${escHtml(m.label)}` : escHtml(m.label);
-        html += `<div class="cc-popover-item${usable ? "" : " cc-popover-item-disabled"}"
-                      data-val="${escAttr(m.value)}" data-prov="${key}"
-                      ${active ? 'data-active="1"' : ""}
-                      ${usable ? "" : 'data-locked="1"'}
-                      style="${usable ? "" : "opacity:0.55;"}">
+        html += `<div class="cc-popover-item" data-cli="${escAttr(m.value)}"
+                      ${active ? 'data-active="1"' : ""}>
                    <span class="cc-popover-icon">${active ? "✓" : ""}</span>
-                   <span>${label}</span>
+                   <span>${escHtml(m.label)}</span>
                  </div>`;
       }
-    }
-    // Empty-state nudge — when nothing is usable, point the user at the
-    // dedicated Settings screen instead of leaving them with a dropdown
-    // that only offers "Server default".
-    if (usableCount === 0) {
-      html += `<div class="cc-popover-section-label" style="color:#f9e2af;">
-                 ⚠ No LLM key configured
-               </div>
-               <div class="cc-popover-item" data-action="open-providers">
-                 <span class="cc-popover-icon">⚙</span>
-                 <span>Open Settings → Providers…</span>
-               </div>
-               <div class="cc-popover-item" data-action="open-custom-models">
-                 <span class="cc-popover-icon">✨</span>
-                 <span>Add a custom model…</span>
+      // Footer hint clarifies subscription-vs-API-key distinction.
+      html += `<div style="border-top:1px solid var(--cc-border);
+                            padding:8px 12px 6px;
+                            font-size:10px;color:var(--cc-fg-muted);
+                            display:flex;align-items:center;gap:6px;">
+                 <span>ⓘ</span>
+                 <span>These come from your ${escHtml(cli.label)} subscription —
+                       no API key required.</span>
                </div>`;
+    } else {
+      const curVal = modelSelectEl?.value || "";
+      html += `<div class="cc-popover-item" data-val="" ${curVal === "" ? 'data-active="1"' : ""}>
+                    <span class="cc-popover-icon">·</span>
+                    <span>Server default</span>
+                  </div>`;
+      let usableCount = 0;
+      for (const [key, prov] of Object.entries(PROVIDERS)) {
+        const models = _modelsForProvider(key);
+        // Skip empty tabs (chiefly the Custom catch-all when the user
+        // hasn't pinned anything to it yet) so the popover stays tidy.
+        if (models.length === 0) continue;
+        const usable = _isProviderUsable(key);
+        if (usable) usableCount++;
+        const lockSuffix = usable ? "" : " · no key";
+        html += `<div class="cc-popover-section-label" style="color:${prov.color};${usable ? "" : "opacity:0.55;"}">
+                   ${prov.emoji} ${escHtml(prov.label)}${lockSuffix}
+                 </div>`;
+        for (const m of models) {
+          const active = m.value === curVal;
+          const label = m.custom ? `✨ ${escHtml(m.label)}` : escHtml(m.label);
+          html += `<div class="cc-popover-item${usable ? "" : " cc-popover-item-disabled"}"
+                        data-val="${escAttr(m.value)}" data-prov="${key}"
+                        ${active ? 'data-active="1"' : ""}
+                        ${usable ? "" : 'data-locked="1"'}
+                        style="${usable ? "" : "opacity:0.55;"}">
+                     <span class="cc-popover-icon">${active ? "✓" : ""}</span>
+                     <span>${label}</span>
+                   </div>`;
+        }
+      }
+      // Empty-state nudge — when nothing is usable, point the user at the
+      // dedicated Settings screen instead of leaving them with a dropdown
+      // that only offers "Server default".
+      if (usableCount === 0) {
+        html += `<div class="cc-popover-section-label" style="color:#f9e2af;">
+                   ⚠ No LLM key configured
+                 </div>
+                 <div class="cc-popover-item" data-action="open-providers">
+                   <span class="cc-popover-icon">⚙</span>
+                   <span>Open Settings → Providers…</span>
+                 </div>
+                 <div class="cc-popover-item" data-action="open-custom-models">
+                   <span class="cc-popover-icon">✨</span>
+                   <span>Add a custom model…</span>
+                 </div>`;
+      }
     }
     _modelPopover.innerHTML = html;
     // Position near the chip.
@@ -3183,6 +3352,15 @@ function createComfyClawPanel() {
     // Wire item clicks.
     _modelPopover.querySelectorAll(".cc-popover-item").forEach((item) => {
       item.addEventListener("click", () => {
+        // CLI-backend rows: persist the choice for that backend and
+        // refresh the chip without touching the LiteLLM <select>.
+        if (item.dataset.cli !== undefined) {
+          const beId = _activeBackendId();
+          _setCliModelFor(beId, item.dataset.cli);
+          _refreshModelChip();
+          _modelPopover.dataset.open = "0";
+          return;
+        }
         // Action items (empty-state nudges) bypass the model-select path.
         const action = item.dataset.action;
         if (action === "open-providers") {
@@ -3244,19 +3422,19 @@ function createComfyClawPanel() {
     b.addEventListener("click", () => setTimeout(_refreshModelChip, 0)));
 
   // ── Composer backend chip + popover (LiteLLM / Claude Code / Codex / …) ───
-  const beChip      = panel.querySelector("#cc-composer-backend-chip");
+  const beChip = panel.querySelector("#cc-composer-backend-chip");
   const beChipLabel = beChip?.querySelector(".cc-chip-label");
-  const beChipIcon  = beChip?.querySelector(".cc-chip-icon");
+  const beChipIcon = beChip?.querySelector(".cc-chip-icon");
 
   // Brand-coloured rounded square logos with a single letter glyph.  We use
   // text marks instead of bundled SVGs to (a) avoid copyright concerns and
   // (b) stay self-contained — the picker reads only from this map and the
   // `_backendLogoHtml` helper below.
   const BACKEND_META = {
-    "litellm":     { label: "LiteLLM",     letter: "L", brand: "#7287fd", needsApiKey: true  },
+    "litellm": { label: "LiteLLM", letter: "L", brand: "#7287fd", needsApiKey: true },
     "claude-code": { label: "Claude Code", letter: "C", brand: "#cc785c", needsApiKey: false },
-    "codex":       { label: "Codex",       letter: "O", brand: "#10a37f", needsApiKey: false },
-    "gemini-cli":  { label: "Gemini CLI",  letter: "G", brand: "#4285f4", needsApiKey: false },
+    "codex": { label: "Codex", letter: "O", brand: "#10a37f", needsApiKey: false },
+    "gemini-cli": { label: "Gemini CLI", letter: "G", brand: "#4285f4", needsApiKey: false },
   };
 
   /** Render the brand-coloured logo chip for a backend. */
@@ -3275,7 +3453,7 @@ function createComfyClawPanel() {
   }
   function _refreshBackendChip() {
     if (!beChip) return;
-    const id   = _activeBackendId();
+    const id = _activeBackendId();
     const meta = BACKEND_META[id] || BACKEND_META["litellm"];
     if (beChipLabel) beChipLabel.textContent = meta.label;
     // Replace the unicode placeholder with the backend's brand logo so the
@@ -3284,12 +3462,15 @@ function createComfyClawPanel() {
       beChipIcon.style.cssText = "";  // wipe any previous letter-glyph font sizing
       beChipIcon.innerHTML = _backendLogoHtml(meta, 14);
     }
-    // CLI backends manage their own model — visually de-emphasize the model
-    // chip so the user isn't confused into thinking it controls them.
+    // The model chip is now meaningful for CLI backends too — it lets
+    // the user pick which Claude / OpenAI / Gemini model the CLI talks
+    // to.  Keep it visible across all backends and let the popover
+    // route to either the LiteLLM provider grid or the CLI-specific
+    // model list based on the active backend.
     const modelChipEl = panel.querySelector("#cc-composer-model-chip");
-    if (modelChipEl) {
-      modelChipEl.style.display = meta.needsApiKey ? "" : "none";
-    }
+    if (modelChipEl) modelChipEl.style.display = "";
+    // Refresh the chip text + dot colour for the new backend.
+    _refreshModelChip?.();
   }
 
   let _bePopover = null;
@@ -3306,11 +3487,11 @@ function createComfyClawPanel() {
   }
 
   function _connectedHint(state) {
-    if (state === "ok")            return "Connected";
+    if (state === "ok") return "Connected";
     if (state === "needs_install") return "Not installed — open Settings → Agents";
-    if (state === "needs_auth")    return "Not signed in — open Settings → Agents";
-    if (state === "unsupported")   return "Unavailable on this host";
-    if (state === "error")         return "Probe error";
+    if (state === "needs_auth") return "Not signed in — open Settings → Agents";
+    if (state === "unsupported") return "Unavailable on this host";
+    if (state === "error") return "Probe error";
     return "";
   }
 
@@ -3490,8 +3671,8 @@ function createComfyClawPanel() {
     _installModal._inFlight = true;
     _installModal._appendLine = (level, text) => {
       const line = document.createElement("div");
-      if (level === "error")       line.style.color = "var(--cc-accent-red)";
-      else if (level === "info")   line.style.color = "var(--cc-fg-muted)";
+      if (level === "error") line.style.color = "var(--cc-accent-red)";
+      else if (level === "info") line.style.color = "var(--cc-fg-muted)";
       line.textContent = text;
       logEl.appendChild(line);
       logEl.scrollTop = logEl.scrollHeight;
@@ -3500,8 +3681,8 @@ function createComfyClawPanel() {
       statusEl.textContent = text;
       statusEl.style.color =
         kind === "error" ? "var(--cc-accent-red)" :
-        kind === "ok"    ? "var(--cc-accent-green)" :
-        "var(--cc-fg-muted)";
+          kind === "ok" ? "var(--cc-accent-green)" :
+            "var(--cc-fg-muted)";
     };
 
     if (!_wsSend({ type: "backend_install_start", backend: backendId })) {
@@ -3516,8 +3697,8 @@ function createComfyClawPanel() {
   // ``opts.mode`` (codex only) picks "browser" (default) or "device_code".
   function _openSignInModal(backendId, opts = {}) {
     if (backendId === "claude-code") return _openClaudeAuthModal(backendId, opts);
-    if (backendId === "codex")        return _openCodexAuthModal(backendId, opts);
-    if (backendId === "gemini-cli")   return _openGeminiAuthModal(backendId, opts);
+    if (backendId === "codex") return _openCodexAuthModal(backendId, opts);
+    if (backendId === "gemini-cli") return _openGeminiAuthModal(backendId, opts);
     showToast(
       `No in-panel sign-in for ${backendId} yet.`,
       "warning",
@@ -3558,8 +3739,8 @@ function createComfyClawPanel() {
       statusEl.textContent = text;
       statusEl.style.color =
         kind === "error" ? "var(--cc-accent-red)" :
-        kind === "ok"    ? "var(--cc-accent-green)" :
-        "var(--cc-fg-muted)";
+          kind === "ok" ? "var(--cc-accent-green)" :
+            "var(--cc-fg-muted)";
     };
 
     const renderIntro = () => {
@@ -3637,9 +3818,9 @@ function createComfyClawPanel() {
 
     // Public surface the global WS dispatcher calls into.  No URL/code in
     // this flow — the only thing that matters is _showSuccess / _showFailure.
-    _authModal._showWaiting    = () => {};
-    _authModal._showSignInLink = () => {};
-    _authModal._showDeviceCode = () => {};
+    _authModal._showWaiting = () => { };
+    _authModal._showSignInLink = () => { };
+    _authModal._showDeviceCode = () => { };
     _authModal._showSuccess = (detail) => {
       body.innerHTML = `
         <div style="display:flex;align-items:flex-start;gap:10px;
@@ -3721,9 +3902,9 @@ function createComfyClawPanel() {
 
     _authModal._showWaiting = () => {
       stepEl.innerHTML = `
-        <div style="display:flex;align-items:center;gap:8px;">
+        <div style="display:flex;align-items:center;gap:10px;">
           <span class="cc-spinner" style="
-            width:14px;height:14px;border:2px solid var(--cc-border);
+            width:18px;height:18px;border:2.5px solid var(--cc-border);
             border-top-color:var(--cc-accent);border-radius:50%;
             animation:cc-spin 0.8s linear infinite;"></span>
           <span>Asking Claude for a sign-in link…</span>
@@ -3777,8 +3958,8 @@ function createComfyClawPanel() {
           </button>
         </div>
       `;
-      const $copy   = stepEl.querySelector(".cc-auth-copy-link");
-      const $input  = stepEl.querySelector(".cc-auth-paste");
+      const $copy = stepEl.querySelector(".cc-auth-copy-link");
+      const $input = stepEl.querySelector(".cc-auth-paste");
       const $submit = stepEl.querySelector(".cc-auth-submit");
       $copy?.addEventListener("click", () => {
         navigator.clipboard?.writeText(url).then(
@@ -3803,8 +3984,8 @@ function createComfyClawPanel() {
       statusEl.textContent = text;
       statusEl.style.color =
         kind === "error" ? "var(--cc-accent-red)" :
-        kind === "ok"    ? "var(--cc-accent-green)" :
-        "var(--cc-fg-muted)";
+          kind === "ok" ? "var(--cc-accent-green)" :
+            "var(--cc-fg-muted)";
     };
 
     _authModal._showSuccess = (detail) => {
@@ -3936,18 +4117,18 @@ function createComfyClawPanel() {
     };
 
     const _render = () => {
-      const url  = _authModal._codexUrl;
+      const url = _authModal._codexUrl;
       const code = _authModal._codexCode;
       if (!url) {
         stepEl.innerHTML = `
-          <div style="display:flex;align-items:center;gap:8px;">
+          <div style="display:flex;align-items:center;gap:10px;">
             <span class="cc-spinner" style="
-              width:14px;height:14px;border:2px solid var(--cc-border);
+              width:18px;height:18px;border:2.5px solid var(--cc-border);
               border-top-color:var(--cc-accent);border-radius:50%;
               animation:cc-spin 0.8s linear infinite;"></span>
             <span>${mode === "device_code"
-              ? "Waiting for Codex to print the device-code link…"
-              : "Asking Codex for a sign-in link…"}</span>
+            ? "Waiting for Codex to print the device-code link…"
+            : "Asking Codex for a sign-in link…"}</span>
           </div>
         `;
         return;
@@ -4109,8 +4290,8 @@ function createComfyClawPanel() {
       statusEl.textContent = text;
       statusEl.style.color =
         kind === "error" ? "var(--cc-accent-red)" :
-        kind === "ok"    ? "var(--cc-accent-green)" :
-        "var(--cc-fg-muted)";
+          kind === "ok" ? "var(--cc-accent-green)" :
+            "var(--cc-fg-muted)";
     };
     _authModal._showSuccess = (detail) => {
       stepEl.innerHTML = `
@@ -4227,7 +4408,7 @@ function createComfyClawPanel() {
       _refreshBackendChip();
     },
     openInstall: (id) => _openClaudeInstallModal(id),
-    openSignIn:  (id, opts) => _openSignInModal(id, opts),
+    openSignIn: (id, opts) => _openSignInModal(id, opts),
     /** Re-login: same modal flow as Sign in but the server runs
      *  `<binary> logout` first to clear cached creds. */
     openRelogin: (id) => _openSignInModal(id, { force: true }),
@@ -4261,10 +4442,10 @@ function createComfyClawPanel() {
   // ── Composer Strategy chip — cycles Scratch / Improve, mirrors hidden btns ─
   const stratChip = panel.querySelector("#cc-composer-strategy-chip");
   const stratLabel = stratChip?.querySelector(".cc-chip-label");
-  const stratIcon  = stratChip?.querySelector(".cc-chip-icon");
+  const stratIcon = stratChip?.querySelector(".cc-chip-icon");
   function _refreshStrategyChip() {
     const mode = stratChip?.dataset.mode || "scratch";
-    if (stratIcon)  stratIcon.textContent  = mode === "improve" ? "🔧" : "✨";
+    if (stratIcon) stratIcon.textContent = mode === "improve" ? "🔧" : "✨";
     if (stratLabel) stratLabel.textContent = mode === "improve" ? "Improve" : "Scratch";
   }
   if (stratChip) {
@@ -4306,8 +4487,10 @@ function createComfyClawPanel() {
   resizeHandle.addEventListener("mousedown", e => {
     if (_dockMode !== "float") return;
     e.preventDefault(); e.stopPropagation();
-    _resizing = { mode: "corner", x: e.clientX, y: e.clientY,
-                  w: panel.offsetWidth, h: panel.offsetHeight };
+    _resizing = {
+      mode: "corner", x: e.clientX, y: e.clientY,
+      w: panel.offsetWidth, h: panel.offsetHeight
+    };
   });
   edgeResize.addEventListener("mousedown", e => {
     if (_dockMode !== "sidebar") return;
@@ -4319,7 +4502,7 @@ function createComfyClawPanel() {
     if (_resizing.mode === "corner") {
       const newW = Math.max(320, _resizing.w + (e.clientX - _resizing.x));
       const newH = Math.max(300, Math.min(window.innerHeight * 0.92, _resizing.h + (e.clientY - _resizing.y)));
-      panel.style.width    = newW + "px";
+      panel.style.width = newW + "px";
       panel.style.maxHeight = newH + "px";
     } else {
       // Sidebar: dragging the left edge to the LEFT grows the panel.
@@ -4355,22 +4538,22 @@ function createComfyClawPanel() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 let _scoreboardSink = null;   // (msg) => void; bound by tab augmentation
-let _historyTabRef  = null;   // .startRun / .endRun / .addImage / .addIterationScore
-let _skillsTabRef   = null;
-let _modeToggleRef  = null;
+let _historyTabRef = null;   // .startRun / .endRun / .addImage / .addIterationScore
+let _skillsTabRef = null;
+let _modeToggleRef = null;
 let _backendPickerRef = null;
-let _tabStripRef    = null;   // .setBadge / .activate / .value
-let _lastGenState   = null;   // "done" | "dry_run" | "error" — for History.endRun
+let _tabStripRef = null;   // .setBadge / .activate / .value
+let _lastGenState = null;   // "done" | "dry_run" | "error" — for History.endRun
 
 function _augmentPanelWithTabs(panel) {
   const headerEl = panel.querySelector("#comfyclaw-gen-header");
   const generateBody = panel.querySelector("#comfyclaw-gen-body");
-  const actionBar    = panel.querySelector("#comfyclaw-action-bar");
-  const logBody      = panel.querySelector("#comfyclaw-think-body");
+  const actionBar = panel.querySelector("#comfyclaw-action-bar");
+  const logBody = panel.querySelector("#comfyclaw-think-body");
   if (!headerEl || !generateBody || !logBody) return;
 
   // 1) Build the skills + history tabs (lazy).
-  const skillsTab  = createSkillsTab({ getWs: () => _activeSyncClient?.ws });
+  const skillsTab = createSkillsTab({ getWs: () => _activeSyncClient?.ws });
   const historyTab = createHistoryTab({
     onReusePrompt: (text) => {
       if (!text) return;
@@ -4386,7 +4569,7 @@ function _augmentPanelWithTabs(panel) {
       showToast("Prompt loaded into Generate", "info", 1800);
     },
   });
-  _skillsTabRef  = skillsTab;
+  _skillsTabRef = skillsTab;
   _historyTabRef = historyTab;
 
   // Wrap the legacy generate body + log body into one Generate slot.
@@ -4426,21 +4609,27 @@ function _augmentPanelWithTabs(panel) {
   const tabStrip = createTabStrip({
     initial: "generate",
     tabs: [
-      { id: "generate", label: "Generate", icon: "✨",
-        title: "Compose prompts and run the agent" },
-      { id: "skills",   label: "Skills",   icon: "📚",
+      {
+        id: "generate", label: "Generate", icon: "✨",
+        title: "Compose prompts and run the agent"
+      },
+      {
+        id: "skills", label: "Skills", icon: "📚",
         title: "Browse, import, and manage skills",
-        onActivate: () => skillsTab.refresh() },
-      { id: "history",  label: "History",  icon: "🖼",
-        title: "Past generations with iteration scores and image previews" },
+        onActivate: () => skillsTab.refresh()
+      },
+      {
+        id: "history", label: "History", icon: "🖼",
+        title: "Past generations with iteration scores and image previews"
+      },
     ],
   });
   _tabStripRef = tabStrip;
   // Insert tab strip just below the header.
   parent.insertBefore(tabStrip.root, generateSlot);
   tabStrip.bindSlot("generate", generateSlot);
-  tabStrip.bindSlot("skills",   skillsSlot);
-  tabStrip.bindSlot("history",  historySlot);
+  tabStrip.bindSlot("skills", skillsSlot);
+  tabStrip.bindSlot("history", historySlot);
 
   // 3) Inject the Mode toggle (Manual/Auto/Co-pilot) at the top of the
   // controls body — strategy buttons are hidden now (the composer drives
@@ -4448,10 +4637,10 @@ function _augmentPanelWithTabs(panel) {
   const legacyModeRow = panel.querySelector("#comfyclaw-gen-mode");
   if (legacyModeRow) {
     const _applyModeToAdvanced = (m) => {
-      const itEl  = panel.querySelector("#comfyclaw-gen-iters");
+      const itEl = panel.querySelector("#comfyclaw-gen-iters");
       const verEl = panel.querySelector("#comfyclaw-gen-verifier");
       const advDetails = panel.querySelector("#comfyclaw-adv-details");
-      const modePill   = panel.querySelector("#comfyclaw-adv-mode-pill");
+      const modePill = panel.querySelector("#comfyclaw-adv-mode-pill");
       const manualHint = panel.querySelector("#comfyclaw-adv-manual-hint");
       // 1) Coerce values to match the mode's semantics.
       if (m === "manual") {
@@ -4491,8 +4680,8 @@ function _augmentPanelWithTabs(panel) {
       if (modePill) {
         modePill.textContent = m;
         const colorMap = {
-          manual:  "var(--cc-fg-dim)",
-          auto:    "var(--cc-accent-blue)",
+          manual: "var(--cc-fg-dim)",
+          auto: "var(--cc-accent-blue)",
           copilot: "var(--cc-accent-orange)",
         };
         modePill.style.color = colorMap[m] || "var(--cc-fg-dim)";
@@ -4594,19 +4783,19 @@ function setGenRunning(running) {
   _clawPanelRunning = running;
   _isGenerating = running;
   if (!_clawPanel) return;
-  const genBtn  = _clawPanel.querySelector("#comfyclaw-gen-btn");
+  const genBtn = _clawPanel.querySelector("#comfyclaw-gen-btn");
   const stopBtn = _clawPanel.querySelector("#comfyclaw-gen-stop");
   const debugBtn = _clawPanel.querySelector("#comfyclaw-debug-btn");
-  const progEl   = _clawPanel.querySelector("#cc-gen-progress");
-  const compRun  = _clawPanel.querySelector("#cc-composer-run");
+  const progEl = _clawPanel.querySelector("#cc-gen-progress");
+  const compRun = _clawPanel.querySelector("#cc-composer-run");
   const compStop = _clawPanel.querySelector("#cc-composer-stop");
-  const compAud  = _clawPanel.querySelector("#cc-composer-audit");
+  const compAud = _clawPanel.querySelector("#cc-composer-audit");
   const compProg = _clawPanel.querySelector("#cc-composer-progress");
-  genBtn.style.display  = running ? "none" : "";
+  genBtn.style.display = running ? "none" : "";
   stopBtn.style.display = running ? "" : "none";
-  if (compRun)  compRun.style.display  = running ? "none" : "";
+  if (compRun) compRun.style.display = running ? "none" : "";
   if (compStop) compStop.style.display = running ? "" : "none";
-  if (compAud)  compAud.disabled = running;
+  if (compAud) compAud.disabled = running;
   if (debugBtn) debugBtn.disabled = running;
   if (progEl) progEl.style.display = running ? "block" : "none";
   if (compProg) compProg.style.display = running ? "block" : "none";
@@ -4628,7 +4817,7 @@ function setGenRunning(running) {
     if (timerEls.length) {
       _genTimerInterval = setInterval(() => {
         const s = Math.floor((Date.now() - _genStartTime) / 1000);
-        const formatted = `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
+        const formatted = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
         for (const el of timerEls) el.textContent = formatted;
       }, 1000);
     }
@@ -4668,11 +4857,11 @@ function setGenStatus(state, text) {
     if (compWrap) compWrap.style.display = "none";
   }
   // Track terminal state so setGenRunning can mark history correctly.
-  if (state === "complete")     _lastGenState = "done";
+  if (state === "complete") _lastGenState = "done";
   else if (state === "dry_run_done") _lastGenState = "dry_run";
-  else if (state === "error")        _lastGenState = "error";
+  else if (state === "error") _lastGenState = "error";
   if (state === "complete") showToast(text, "success", 3000);
-  if (state === "error")    showToast(text.slice(0, 80), "error",   4000);
+  if (state === "error") showToast(text.slice(0, 80), "error", 4000);
 }
 
 function appendAgentLog(event) {
@@ -4689,14 +4878,14 @@ function appendAgentLog(event) {
   const style = EVENT_STYLES[event.event_type] || EVENT_STYLES.info;
   const entry = document.createElement("div");
   Object.assign(entry.style, {
-    marginBottom:  "4px",
-    padding:       "5px 9px",
-    borderRadius:  "var(--cc-radius-xs)",
-    background:    "var(--cc-surface-2)",
-    borderLeft:    `3px solid ${style.color}`,
-    fontSize:      "12px",
-    lineHeight:    "1.4",
-    wordBreak:     "break-word",
+    marginBottom: "4px",
+    padding: "5px 9px",
+    borderRadius: "var(--cc-radius-xs)",
+    background: "var(--cc-surface-2)",
+    borderLeft: `3px solid ${style.color}`,
+    fontSize: "12px",
+    lineHeight: "1.4",
+    wordBreak: "break-word",
   });
 
   const time = event.timestamp
@@ -4716,9 +4905,9 @@ function appendAgentLog(event) {
   if (event.event_type === "tool_call" && event.tool_name) {
     const argsStr = event.tool_args
       ? Object.entries(event.tool_args).map(([k, v]) =>
-          `<span style="color:var(--cc-fg-muted);">${escapeHtml(k)}</span>=`
-          + `<span style="color:var(--cc-accent-yellow);">${escapeHtml(String(v).slice(0, 80))}</span>`
-        ).join(", ")
+        `<span style="color:var(--cc-fg-muted);">${escapeHtml(k)}</span>=`
+        + `<span style="color:var(--cc-accent-yellow);">${escapeHtml(String(v).slice(0, 80))}</span>`
+      ).join(", ")
       : "";
     body = `<span style="color:${style.color}; font-weight:600;">${escapeHtml(event.tool_name)}</span>`
       + (argsStr ? `<br><span style="font-size:11px;">${argsStr}</span>` : "");
@@ -4743,7 +4932,7 @@ function appendAgentLog(event) {
         <span>
           ${style.icon}
           <span style="color:${style.color}; font-weight:600; font-size:11px;">${style.label}</span>
-          <span class="cc-spin" style="font-size:10px;margin-left:5px;color:var(--cc-fg-dim);">⟳</span>
+          <span class="cc-spin" style="font-size:14px;margin-left:6px;color:var(--cc-accent);">⟳</span>
         </span>
         <span style="color:var(--cc-fg-dim); font-size:10px;">${time}</span>
       </div>
@@ -4759,8 +4948,8 @@ function appendAgentLog(event) {
       <span>${style.icon} <span style="color:${style.color}; font-weight:600; font-size:11px;">${style.label}</span>${iterBadge}</span>
       <div style="display:flex;align-items:center;gap:6px;">
         <button class="cc-msg-copy" title="Copy text"
-                style="background:none;border:none;color:var(--cc-fg-dim);cursor:pointer;font-size:11px;
-                       padding:1px 4px;border-radius:4px;line-height:1;">⎘</button>
+                style="background:none;border:none;color:var(--cc-fg-dim);cursor:pointer;font-size:14px;
+                       padding:2px 5px;border-radius:4px;line-height:1;">⎘</button>
         <span style="color:var(--cc-fg-dim); font-size:10px;">${time}</span>
       </div>
     </div>
@@ -4790,7 +4979,7 @@ function appendAgentLog(event) {
           btn.textContent = "Copied!";
           setTimeout(() => { btn.textContent = "Copy"; }, 1500);
         });
-      } catch(_) { showToast("Copy failed", "error"); }
+      } catch (_) { showToast("Copy failed", "error"); }
     });
   });
 
@@ -4843,7 +5032,7 @@ function escapeHtml(str) {
 const _CONNECTION_ID = (() => {
   let id = sessionStorage.getItem("comfyclaw_connection_id");
   if (!id) {
-    id = `tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`;
+    id = `tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     sessionStorage.setItem("comfyclaw_connection_id", id);
   }
   return id;
@@ -4891,7 +5080,7 @@ class SyncClient {
       }
     };
 
-    this.ws.onerror = () => {};
+    this.ws.onerror = () => { };
 
     this.ws.onclose = () => {
       if (!this.destroyed) {
@@ -4942,15 +5131,15 @@ class SyncClient {
       }
     } else if (msg.type === "workflow_diff" && Array.isArray(msg.ops)) {
       const addCount = msg.ops.filter(o => o.op === "add_node").length;
-      const rmCount  = msg.ops.filter(o => o.op === "remove_node").length;
+      const rmCount = msg.ops.filter(o => o.op === "remove_node").length;
       const updCount = msg.ops.filter(o => o.op === "update_node").length;
       await applyDiffOps(msg.ops);
       const total = Object.keys(_currentApiWorkflow).length;
       _updateNodeCount(total);
       const parts = [];
-      if (addCount)  parts.push(`+${addCount}`);
-      if (rmCount)   parts.push(`-${rmCount}`);
-      if (updCount)  parts.push(`~${updCount}`);
+      if (addCount) parts.push(`+${addCount}`);
+      if (rmCount) parts.push(`-${rmCount}`);
+      if (updCount) parts.push(`~${updCount}`);
       setStatus("updated", `${total} nodes (${parts.join(", ")})`);
     } else if (msg.type === "request_feedback") {
       console.log("[ComfyClaw] Feedback requested for iteration", msg.iteration);
@@ -4978,17 +5167,19 @@ class SyncClient {
       } else {
         setGenStatus("complete",
           `✓ Done — score ${(msg.score ?? 0).toFixed(2)}, ${msg.iterations_used} iter${elapsedStr}`);
-        appendAgentLog({ event_type: "info",
+        appendAgentLog({
+          event_type: "info",
           content: `✅ Generation complete! Score: **${(msg.score ?? 0).toFixed(2)}**, iterations: ${msg.iterations_used}${elapsedStr}`,
-          timestamp: Date.now() / 1000 });
+          timestamp: Date.now() / 1000
+        });
       }
       // Phase 4: feed images into the History tab.
       if (_historyTabRef && Array.isArray(msg.images)) {
         for (const img of msg.images) {
           _historyTabRef.addImage({
-            filename:  img.filename || img,
+            filename: img.filename || img,
             subfolder: img.subfolder || "",
-            type:      img.type || "output",
+            type: img.type || "output",
             iteration: msg.iterations_used,
           });
         }
@@ -5005,9 +5196,9 @@ class SyncClient {
       // Phase 4: live scoreboard card in the agent log + History timeline.
       if (typeof _scoreboardSink === "function") _scoreboardSink(msg);
     } else if (msg.type === "skills_manifest"
-            || msg.type === "skill_body"
-            || msg.type === "skill_import_result"
-            || msg.type === "skill_error") {
+      || msg.type === "skill_body"
+      || msg.type === "skill_import_result"
+      || msg.type === "skill_error") {
       _skillsTabRef?.onMessage(msg);
     } else if (msg.type === "agent_backends") {
       const map = {};
@@ -5026,7 +5217,7 @@ class SyncClient {
       // Reflect any auto-demotion (e.g., saved CLI backend is missing on this
       // host → picker falls back to litellm) into the composer chip.
       document.getElementById("cc-composer-backend-chip")
-              ?.dispatchEvent(new CustomEvent("cc-backend-refresh"));
+        ?.dispatchEvent(new CustomEvent("cc-backend-refresh"));
 
     } else if (msg.type === "provider_keys") {
       // Server tells us which LiteLLM provider env-vars it has set, plus any
@@ -5047,7 +5238,7 @@ class SyncClient {
         if (fallback) _setActiveProvider(fallback, false);
       }
 
-    // ── Backend setup flows: install + OAuth ─────────────────────────────────
+      // ── Backend setup flows: install + OAuth ─────────────────────────────────
     } else if (msg.type === "backend_install_progress") {
       // Streamed line from the installer subprocess.
       if (_installModal?.isOpen?.() && typeof _installModal._appendLine === "function") {
@@ -5117,11 +5308,11 @@ class SyncClient {
     } else if (msg.type === "agent_event") {
       appendAgentLog(msg);
 
-    // ── Chat streaming ────────────────────────────────────────────────────────
+      // ── Chat streaming ────────────────────────────────────────────────────────
     } else if (msg.type === "chat_response") {
       _appendChatToken(msg.message_id, msg.token, msg.done);
 
-    // ── Checkpoint list update ────────────────────────────────────────────────
+      // ── Checkpoint list update ────────────────────────────────────────────────
     } else if (msg.type === "checkpoints_list") {
       _checkpoints = msg.checkpoints || [];
       _renderCheckpoints();
@@ -5135,7 +5326,7 @@ class SyncClient {
         console.warn("[ComfyClaw] Checkpoint restore failed for id:", msg.id);
       }
 
-    // ── Debug results ─────────────────────────────────────────────────────────
+      // ── Debug results ─────────────────────────────────────────────────────────
     } else if (msg.type === "debug_status") {
       setGenStatus(msg.state, msg.detail || "Running debug…");
 
@@ -5228,7 +5419,7 @@ function createChatPanel() {
   // ── Send on click ────────────────────────────────────────────────────────
   const sendMsg = () => {
     const input = panel.querySelector("#comfyclaw-chat-input");
-    const text  = input.value.trim();
+    const text = input.value.trim();
     if (!text || _chatStreaming) return;
     if (_activeSyncClient?.ws?.readyState !== WebSocket.OPEN) return;
 
@@ -5245,15 +5436,21 @@ function createChatPanel() {
     _createStreamBubble(msgId);
 
     const _fpp = _activeProvPayload();
+    const _fbe = _backendPickerRef?.value()
+      || localStorage.getItem("comfyclaw_agent_backend")
+      || "litellm";
+    // For CLI backends, attach the per-backend model selection so the
+    // floating chat panel honours the user's choice the same way the
+    // main panel does.
+    const _fmodel = _isCliBackend(_fbe) ? _cliModelFor(_fbe) : undefined;
     _activeSyncClient.ws.send(JSON.stringify({
-      type:          "chat_message",
-      message_id:    msgId,
-      messages:      _chatHistory,
-      api_key:       _fpp.api_key  || undefined,
-      api_base:      _fpp.api_base || undefined,
-      agent_backend: _backendPickerRef?.value()
-                       || localStorage.getItem("comfyclaw_agent_backend")
-                       || "litellm",
+      type: "chat_message",
+      message_id: msgId,
+      messages: _chatHistory,
+      model: _fmodel,
+      api_key: _fpp.api_key || undefined,
+      api_base: _fpp.api_base || undefined,
+      agent_backend: _fbe,
     }));
   };
 
@@ -5377,7 +5574,7 @@ function _appendChatToken(msgId, token, done) {
                 btn.textContent = "Copied!";
                 setTimeout(() => { btn.textContent = "Copy"; }, 1500);
               });
-            } catch(_) { showToast("Copy failed", "error"); }
+            } catch (_) { showToast("Copy failed", "error"); }
           });
         });
       }
@@ -5418,20 +5615,20 @@ function _renderCheckpoints() {
     const now = Date.now() / 1000;
     const ageSec = now - cp.timestamp;
     let age;
-    if (ageSec < 60)         age = `${Math.round(ageSec)}s ago`;
-    else if (ageSec < 3600)  age = `${Math.round(ageSec/60)}m ago`;
-    else                     age = new Date(cp.timestamp * 1000).toLocaleTimeString();
+    if (ageSec < 60) age = `${Math.round(ageSec)}s ago`;
+    else if (ageSec < 3600) age = `${Math.round(ageSec / 60)}m ago`;
+    else age = new Date(cp.timestamp * 1000).toLocaleTimeString();
 
     // Detect type from label prefix
     const isBefore = cp.label.startsWith("Before:");
-    const isAfter  = cp.label.startsWith("After:");
+    const isAfter = cp.label.startsWith("After:");
     const tagColor = isBefore ? "#f9e2af" : isAfter ? "#a6e3a1" : "#89b4fa";
-    const tagIcon  = isBefore ? "●" : isAfter ? "●" : "●";
+    const tagIcon = isBefore ? "●" : isAfter ? "●" : "●";
 
     row.innerHTML = `
       <span style="color:${tagColor};font-size:9px;flex-shrink:0;">${tagIcon}</span>
       <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
-            title="${escHtml(cp.label)}">${escHtml(cp.label.slice(0,38))}${cp.label.length>38?"…":""}</span>
+            title="${escHtml(cp.label)}">${escHtml(cp.label.slice(0, 38))}${cp.label.length > 38 ? "…" : ""}</span>
       <span style="color:#45475a;font-size:10px;flex-shrink:0;">${age}</span>
     `;
 
@@ -5454,7 +5651,7 @@ function _renderCheckpoints() {
     restoreBtn.addEventListener("click", () => {
       if (_activeSyncClient?.ws?.readyState === WebSocket.OPEN) {
         _activeSyncClient.ws.send(JSON.stringify({ type: "restore_checkpoint", id: cp.id }));
-        showToast(`Restored: ${cp.label.slice(0,30)}`, "success");
+        showToast(`Restored: ${cp.label.slice(0, 30)}`, "success");
       }
     });
 
@@ -5468,8 +5665,8 @@ function _renderCheckpoints() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function _showDebugResult(msg) {
-  const issues   = msg.issues || [];
-  const summary  = msg.summary || "No issues found.";
+  const issues = msg.issues || [];
+  const summary = msg.summary || "No issues found.";
   const hasFixed = !!msg.fixed_workflow;
 
   // Log a formatted debug report entry
@@ -5550,7 +5747,7 @@ async function _registerComfyUISidebarTab() {
             localStorage.setItem("comfyclaw_first_run", "0");
           }
         }
-      } catch (_) {}
+      } catch (_) { }
     }
     return true;
   } catch (err) {

@@ -211,6 +211,87 @@ def _claude_cli_model(model: str) -> str:
     return ""
 
 
+# Codex CLI model ids that ship with a ChatGPT subscription.  Used to
+# whitelist whatever the user picked in the UI dropdown before we hand
+# it to codex — if they (or their saved session) pinned a LiteLLM model
+# like ``openai/gpt-5.5``, we strip the prefix and only forward it when
+# the suffix looks like something codex can actually accept.
+_CODEX_KNOWN_MODELS = {
+    "gpt-5", "gpt-5-codex", "gpt-5-mini", "gpt-5-nano",
+    "gpt-4.1", "gpt-4.1-mini",
+    "o3", "o3-mini", "o4-mini",
+}
+
+
+def _codex_pick_model(model: str) -> str:
+    """Pick a codex model from a user-supplied string.
+
+    Resolution order:
+        1. Explicit ``COMFYCLAW_CODEX_MODEL`` env-var override
+           (operator escape hatch).
+        2. The ``model`` arg, with any LiteLLM provider prefix
+           (``openai/``, ``azure/openai/``, …) stripped, if the bare
+           suffix matches a known codex-compatible model id.
+        3. ``gpt-5-codex`` (recommended for codex CLI usage; works on
+           Plus/Pro/Team plans).
+
+    Returning a single string lets ``_codex_chat_stream`` and
+    ``CodexBackend.run_tool_loop`` share the same logic.
+    """
+    pin = os.environ.get("COMFYCLAW_CODEX_MODEL", "").strip()
+    if pin:
+        return pin
+    raw = (model or "").strip().lower()
+    if raw:
+        suffix = raw.rsplit("/", 1)[-1]  # strip any provider prefix
+        if suffix in _CODEX_KNOWN_MODELS:
+            return suffix
+        # Tolerate slightly off-script names by matching well-known
+        # families — keeps codex from rejecting "gpt-5o" etc. with a
+        # less informative error than ours.
+        if suffix.startswith("gpt-5"):
+            return "gpt-5"
+        if suffix.startswith("o3"):
+            return "o3"
+        if suffix.startswith("o4"):
+            return "o4-mini"
+    return "gpt-5-codex"
+
+
+# Gemini CLI defaults to Gemini 2.5 Pro on signed-in accounts; this set
+# matches the public model list documented by ``gemini -m`` help and
+# Google's pricing page.
+_GEMINI_KNOWN_MODELS = {
+    "gemini-2.5-pro", "gemini-2.5-flash",
+    "gemini-2.0-pro", "gemini-2.0-flash", "gemini-2.0-flash-lite",
+    "gemini-1.5-pro", "gemini-1.5-flash",
+}
+
+
+def _gemini_pick_model(model: str) -> str:
+    """Pick a Gemini CLI model id from a user-supplied string.
+
+    Same resolution scheme as :func:`_codex_pick_model`.  Returns an
+    empty string when no override applies, which the caller treats as
+    "let the CLI fall back to its plan default".
+    """
+    pin = os.environ.get("COMFYCLAW_GEMINI_MODEL", "").strip()
+    if pin:
+        return pin
+    raw = (model or "").strip().lower()
+    if raw:
+        suffix = raw.rsplit("/", 1)[-1]
+        if suffix in _GEMINI_KNOWN_MODELS:
+            return suffix
+        if suffix.startswith("gemini-2.5"):
+            return "gemini-2.5-pro" if "pro" in suffix else "gemini-2.5-flash"
+        if suffix.startswith("gemini-2.0"):
+            return "gemini-2.0-flash" if "flash" in suffix else "gemini-2.0-pro"
+        if suffix.startswith("gemini-1.5"):
+            return "gemini-1.5-pro" if "pro" in suffix else "gemini-1.5-flash"
+    return ""
+
+
 async def _claude_chat_stream(
     messages: list[dict],
     workflow: dict | None,
@@ -522,19 +603,14 @@ async def _codex_chat_stream(
             "--sandbox", "read-only"]
     # Codex's model registry is *not* the LiteLLM registry.  When the
     # user is signed in with a ChatGPT subscription, codex only accepts
-    # a fixed list of model ids (``gpt-5``, ``gpt-5.5``, ``o3``…) —
-    # anything else, including any of the panel's LiteLLM dropdown
-    # entries, gets rejected with ``model not supported with ChatGPT
-    # account``.  Use a known-good default and override the user's
-    # ``~/.codex/config.toml`` via ``-c model=…`` (which leaves their
-    # config file untouched but pins the model for *our* invocation).
-    # The operator can override this default via env-var.
-    codex_model = (
-        os.environ.get("COMFYCLAW_CODEX_MODEL", "").strip() or "gpt-5.5"
-    )
-    # ``-c key=value`` syntax matches what ``codex exec --help`` documents
-    # for in-process config overrides; we pass the model id quoted so
-    # values with hyphens / slashes don't get mangled by the parser.
+    # a fixed list of model ids (``gpt-5``, ``gpt-5-codex``, ``o3``…) —
+    # anything else gets rejected with ``model not supported with
+    # ChatGPT account``.  Translate the user's UI selection through
+    # :func:`_codex_pick_model` (which strips LiteLLM provider prefixes
+    # and whitelists against the known-good set), then apply it via
+    # ``-c model=…`` so the override beats the user's
+    # ``~/.codex/config.toml`` without mutating that file.
+    codex_model = _codex_pick_model(model)
     argv += ["-c", f'model="{codex_model}"']
     argv.append(prompt)
 
@@ -742,10 +818,12 @@ async def _gemini_chat_stream(
 
     # As with codex above, gemini's allowed-model list (tied to the
     # signed-in Google account) doesn't overlap with the LiteLLM panel
-    # registry — forwarding the dropdown value just produces "model not
-    # available" errors.  Honour an explicit ``COMFYCLAW_GEMINI_MODEL``
-    # pin from the environment but otherwise let the CLI use its default.
-    gemini_model = os.environ.get("COMFYCLAW_GEMINI_MODEL", "").strip()
+    # registry, so we translate the user's UI selection through
+    # :func:`_gemini_pick_model` (LiteLLM prefix stripped, whitelisted
+    # against the known-good set).  Empty result means "let the CLI use
+    # its plan default" — we don't pass ``-m`` in that case so gemini
+    # picks whatever its config says.
+    gemini_model = _gemini_pick_model(model)
     if gemini_model:
         argv = [binary, "-m", gemini_model, "-p", prompt]
     else:

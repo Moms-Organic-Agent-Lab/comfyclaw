@@ -199,9 +199,9 @@ const CSS = `
 .cc-icon-btn {
   background: transparent; border: 1px solid transparent;
   color: var(--cc-fg-dim); cursor: pointer;
-  width: 26px; height: 26px; padding: 0;
+  width: 30px; height: 30px; padding: 0;
   border-radius: var(--cc-radius-xs);
-  font-size: 13px; line-height: 1;
+  font-size: 16px; line-height: 1;
   display: inline-flex; align-items: center; justify-content: center;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
@@ -209,7 +209,7 @@ const CSS = `
   color: var(--cc-fg); background: var(--cc-surface-2);
   border-color: var(--cc-border);
 }
-.cc-icon-btn.cc-icon-btn-sm { width: 22px; height: 22px; font-size: 12px; }
+.cc-icon-btn.cc-icon-btn-sm { width: 26px; height: 26px; font-size: 14px; }
 .cc-icon-btn[disabled] { opacity: 0.4; cursor: not-allowed; }
 
 /* ── Inputs ───────────────────────────────────────────────────────────── */
@@ -493,7 +493,7 @@ body[data-cc-has-native-sidebar="1"] #comfyclaw-edge-handle { display: none !imp
 #comfyclaw-action-bar .cc-action-primary .cc-btn { flex: 1; }
 
 /* Theme + dock toggle buttons live inside the header row */
-.cc-header-toggle { font-size: 14px; }
+.cc-header-toggle { font-size: 16px; }
 
 /* ── Cursor-style composer card ──────────────────────────────────────── */
 .cc-composer-card {
@@ -556,12 +556,12 @@ body[data-cc-has-native-sidebar="1"] #comfyclaw-edge-handle { display: none !imp
   font-size: 9px; opacity: 0.55; margin-left: 1px;
 }
 .cc-composer-btn {
-  width: 28px; height: 28px; border-radius: 8px;
+  width: 32px; height: 32px; border-radius: 8px;
   border: 1px solid var(--cc-border);
   background: var(--cc-surface);
   color: var(--cc-fg-muted);
   cursor: pointer;
-  font-size: 13px; line-height: 1;
+  font-size: 15px; line-height: 1;
   display: inline-flex; align-items: center; justify-content: center;
   transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.05s;
   font-family: inherit;
@@ -594,7 +594,7 @@ body[data-cc-has-native-sidebar="1"] #comfyclaw-edge-handle { display: none !imp
 }
 [data-cc-theme="light"] .cc-composer-btn-stop { color: #ffffff; }
 .cc-composer-btn-stop:hover { filter: brightness(1.08); }
-.cc-chip-icon { font-size: 11px; line-height: 1; }
+.cc-chip-icon { font-size: 13px; line-height: 1; }
 
 /* Slim progress bar at the top edge of the composer */
 .cc-composer-progress {

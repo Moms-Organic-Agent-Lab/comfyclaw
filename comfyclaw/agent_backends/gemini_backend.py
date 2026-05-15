@@ -54,12 +54,15 @@ class GeminiCLIBackend:
         # Gemini's CLI tracks Google account capabilities — the
         # LiteLLM dropdown's model id (e.g. ``gemini/gemini-2.5-pro``)
         # doesn't necessarily match what the signed-in account is
-        # entitled to.  Default to letting the CLI pick its plan
-        # default; honour an explicit ``COMFYCLAW_GEMINI_MODEL`` pin if
-        # the operator wants a specific id.
-        # NB: ``-m`` must appear BEFORE ``-p``; gemini's flag parser
-        # otherwise consumes the prompt as the model value.
-        gemini_model = os.environ.get("COMFYCLAW_GEMINI_MODEL", "").strip()
+        # entitled to.  Reuse the chat-side resolver so the UI's model
+        # selection (or ``COMFYCLAW_GEMINI_MODEL``) is honoured when
+        # set, and otherwise fall back to "no ``-m``" so the CLI picks
+        # the plan default.  NB: ``-m`` must appear BEFORE ``-p``;
+        # gemini's flag parser otherwise consumes the prompt as the
+        # model value.
+        from ..chat_agent import _gemini_pick_model
+
+        gemini_model = _gemini_pick_model(self.model)
         if gemini_model:
             base_argv: list[str] = [bin_path, "-m", gemini_model, "-p"]
         else:
