@@ -595,10 +595,10 @@ const PROVIDERS = {
   openai: {
     label: "OpenAI", emoji: "○", color: "#10a37f",
     models: [
-      { value: "openai/gpt-4o",      label: "GPT-4o"     },
-      { value: "openai/gpt-4o-mini", label: "GPT-4o mini" },
-      { value: "openai/o3",          label: "o3"          },
-      { value: "openai/o4-mini",     label: "o4-mini"     },
+      { value: "openai/gpt-5.5",      label: "GPT-5.5"       },
+      { value: "openai/gpt-5.4",      label: "GPT-5.4"       },
+      { value: "openai/gpt-5.4-mini", label: "GPT-5.4 mini"  },
+      { value: "openai/gpt-5.4-nano", label: "GPT-5.4 nano"  },
     ],
   },
   google: {
@@ -1591,7 +1591,8 @@ function createSettingsModal() {
         label = "No key — set one below or in the server's .env";
       }
       return `
-        <div style="background:#313244; border-radius:12px; padding:14px 16px;
+        <div id="cc-prov-card-${key}"
+             style="background:#313244; border-radius:12px; padding:14px 16px;
                     margin-bottom:12px; ${usable ? "" : "opacity:0.85;"}">
           <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
             <span style="font-size:20px; opacity:0.9;">${prov.emoji}</span>
@@ -1667,6 +1668,14 @@ function createSettingsModal() {
                   ${escHtml(m.id)}
                 </div>
               </div>
+              <button class="cc-custom-edit" data-cm-id="${escAttr(m.id)}"
+                      title="Edit this model"
+                      style="background:transparent; border:1px solid #45475a;
+                             color:#cdd6f4; border-radius:6px;
+                             padding:4px 10px; font-size:11px; cursor:pointer;
+                             flex-shrink:0;">
+                Edit
+              </button>
               <button class="cc-custom-remove" data-cm-id="${escAttr(m.id)}"
                       title="Remove this model"
                       style="background:transparent; border:1px solid #45475a;
@@ -1680,7 +1689,8 @@ function createSettingsModal() {
         }).join("");
 
     const customSectionHtml = `
-      <div style="background:#313244; border-radius:12px;
+      <div id="cc-custom-models-section"
+           style="background:#313244; border-radius:12px;
                   padding:14px 16px; margin-top:6px;">
         <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
           <span style="font-size:18px;">✨</span>
@@ -1779,10 +1789,34 @@ function createSettingsModal() {
       _renderProvidersTab(container); // refresh the list above
     };
 
-    container.querySelector("#cc-custom-add")?.addEventListener("click", () => {
-      const idEl    = container.querySelector("#cc-custom-id");
-      const lblEl   = container.querySelector("#cc-custom-label");
-      const tabEl   = container.querySelector("#cc-custom-tab");
+    const idEl    = container.querySelector("#cc-custom-id");
+    const lblEl   = container.querySelector("#cc-custom-label");
+    const tabEl   = container.querySelector("#cc-custom-tab");
+    const addBtn  = container.querySelector("#cc-custom-add");
+
+    // Auto-pick the tab from the LiteLLM prefix the user is typing.
+    // Map of well-known prefixes → tab key.  Anything unrecognised falls
+    // through to the "custom" catch-all.
+    const PREFIX_TO_TAB = {
+      anthropic: "anthropic",
+      openai:    "openai",
+      gemini:    "google",
+      google:    "google",
+      ollama:    "ollama",
+    };
+    let _userTouchedTab = false;
+    tabEl?.addEventListener("change", () => { _userTouchedTab = true; });
+    idEl?.addEventListener("input", () => {
+      if (_userTouchedTab) return;
+      const v = (idEl.value || "").trim();
+      const slash = v.indexOf("/");
+      if (slash <= 0) return;
+      const prefix = v.slice(0, slash).toLowerCase();
+      const tab = PREFIX_TO_TAB[prefix] || "custom";
+      if (tabEl && tabEl.value !== tab) tabEl.value = tab;
+    });
+
+    const submitAdd = () => {
       const id  = (idEl?.value  || "").trim();
       const lbl = (lblEl?.value || "").trim() || id;
       const tab = (tabEl?.value || "custom").trim();
@@ -1796,9 +1830,42 @@ function createSettingsModal() {
         idEl?.focus();
         return;
       }
+      const wasUpdate = _customModels.some((m) => m.id === id);
       _addCustomModel(id, lbl, tab);
-      showToast(`Added ${lbl} (${tab}).`, "success", 2500);
+      showToast(
+        `${wasUpdate ? "Updated" : "Added"} ${lbl} (${PROVIDERS[tab]?.label || tab}).`,
+        "success",
+        2500,
+      );
       afterCustomChange();
+    };
+
+    addBtn?.addEventListener("click", submitAdd);
+
+    // Enter in any of the three form fields submits.
+    [idEl, lblEl, tabEl].forEach((el) => {
+      el?.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); submitAdd(); }
+      });
+    });
+
+    // Click "Edit" on a row → populate the form with that row's values.
+    // We intentionally keep the button labelled "Add" — the dedup-by-id
+    // logic in _addCustomModel naturally overwrites on submit, and adding
+    // a mode switch ("Add" vs "Update" vs "Cancel") tends to confuse more
+    // than it helps for a 3-field form.
+    container.querySelectorAll(".cc-custom-edit").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.dataset.cmId;
+        const m = _customModels.find((x) => x.id === id);
+        if (!m || !idEl || !lblEl || !tabEl) return;
+        idEl.value = m.id;
+        lblEl.value = m.label;
+        tabEl.value = m.tab || "custom";
+        _userTouchedTab = true; // don't let prefix-detect clobber the choice
+        idEl.focus();
+        idEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      });
     });
 
     container.querySelectorAll(".cc-custom-remove").forEach((btn) => {
@@ -1920,7 +1987,7 @@ function createSettingsModal() {
           <select id="cc-def-vmodel" style="${selectStyle}">
             <option value=""                               ${!vmodel ? "selected":""}>Same as Agent model</option>
             <option value="anthropic/claude-sonnet-4-5"   ${vmodel==="anthropic/claude-sonnet-4-5"   ? "selected":""}>Claude Sonnet 4.5</option>
-            <option value="openai/gpt-4o"                 ${vmodel==="openai/gpt-4o"                 ? "selected":""}>GPT-4o</option>
+            <option value="openai/gpt-5.4"                ${vmodel==="openai/gpt-5.4"                ? "selected":""}>GPT-5.4</option>
             <option value="gemini/gemini-2.5-flash"       ${vmodel==="gemini/gemini-2.5-flash"       ? "selected":""}>Gemini 2.5 Flash</option>
           </select>
         </div>
@@ -1957,9 +2024,24 @@ function createSettingsModal() {
   }
 
   // Public
-  overlay.openTo = (tab = "agents") => {
+  // ``anchor`` is the id of an element inside the active tab that should be
+  // scrolled into view after rendering (e.g. ``cc-custom-models-section``).
+  overlay.openTo = (tab = "agents", anchor = null) => {
     overlay.style.display = "flex";
     _activateTab(tab);
+    if (anchor) {
+      // Wait one frame so the just-rendered tab is in the DOM.
+      requestAnimationFrame(() => {
+        const target = box.querySelector(`#${anchor}`);
+        if (target) {
+          target.scrollIntoView({ block: "start", behavior: "smooth" });
+          // Subtle flash so the user sees what we scrolled to.
+          target.style.transition = "box-shadow 0.6s ease";
+          target.style.boxShadow = "0 0 0 2px #cba6f7";
+          setTimeout(() => { target.style.boxShadow = ""; }, 1100);
+        }
+      });
+    }
   };
   // Called from outside when WS-driven backend availability changes; keeps the
   // Agents tab in sync without forcing the user to switch tabs to refresh.
@@ -2036,13 +2118,15 @@ function _setActiveProvider(key, updateSession = true) {
   // user about a key the server actually does have.
   if (updateSession && !_isProviderUsable(key)) {
     const label = PROVIDERS[key]?.label || key;
+    const anchor =
+      key === "custom" ? "cc-custom-models-section" : `cc-prov-card-${key}`;
     showToast(
       `${label} isn't configured yet. Add an API key in Settings → Providers.`,
       "warning",
       4500,
     );
     if (!_settingsModal) _settingsModal = createSettingsModal();
-    _settingsModal.openTo("providers");
+    _settingsModal.openTo("providers", anchor);
     return;
   }
 
@@ -2296,7 +2380,7 @@ function createComfyClawPanel() {
                     style="flex:1;padding:4px 7px;font-size:11px;">
               <option value="">Same as Agent</option>
               <option value="anthropic/claude-sonnet-4-5">Claude Sonnet 4.5</option>
-              <option value="openai/gpt-4o">GPT-4o</option>
+              <option value="openai/gpt-5.4">GPT-5.4</option>
               <option value="gemini/gemini-2.5-flash">Gemini 2.5 Flash</option>
             </select>
           </div>
@@ -2477,6 +2561,33 @@ function createComfyClawPanel() {
     });
     provBar.appendChild(btn);
   });
+
+  // Trailing "+" pill — opens Settings → Providers and scrolls to the
+  // Custom models section.  Surfaces an otherwise-buried feature for
+  // newly-released models (e.g. Opus 4.7) or exotic OpenRouter routes.
+  const addBtn = document.createElement("button");
+  addBtn.className = "cc-provider-add-btn";
+  addBtn.title = "Add a custom model (Settings → Providers → Custom models)";
+  addBtn.style.cssText = `
+    display:flex; align-items:center; gap:3px; padding:4px 8px;
+    border-radius:7px; border:1px dashed var(--cc-border); background:transparent;
+    color:var(--cc-fg-dim); cursor:pointer; font-size:11px; font-weight:600;
+    transition: border-color 0.15s, color 0.15s; flex-shrink:0;
+  `;
+  addBtn.innerHTML = `<span style="font-size:13px;line-height:1;">＋</span>`;
+  addBtn.addEventListener("mouseenter", () => {
+    addBtn.style.borderColor = "#cba6f7";
+    addBtn.style.color = "#cba6f7";
+  });
+  addBtn.addEventListener("mouseleave", () => {
+    addBtn.style.borderColor = "var(--cc-border)";
+    addBtn.style.color = "var(--cc-fg-dim)";
+  });
+  addBtn.addEventListener("click", () => {
+    if (!_settingsModal) _settingsModal = createSettingsModal();
+    _settingsModal.openTo("providers", "cc-custom-models-section");
+  });
+  provBar.appendChild(addBtn);
 
   // ── Advanced summary toggle arrow ─────────────────────────────────────────────
   // CSS rotates the same glyph instead of swapping characters so the
@@ -3020,22 +3131,46 @@ function createComfyClawPanel() {
                   <span class="cc-popover-icon">·</span>
                   <span>Server default</span>
                 </div>`;
+    let usableCount = 0;
     for (const [key, prov] of Object.entries(PROVIDERS)) {
       const models = _modelsForProvider(key);
       // Skip empty tabs (chiefly the Custom catch-all when the user
       // hasn't pinned anything to it yet) so the popover stays tidy.
       if (models.length === 0) continue;
-      html += `<div class="cc-popover-section-label" style="color:${prov.color};">
-                 ${prov.emoji} ${escHtml(prov.label)}
+      const usable = _isProviderUsable(key);
+      if (usable) usableCount++;
+      const lockSuffix = usable ? "" : " · no key";
+      html += `<div class="cc-popover-section-label" style="color:${prov.color};${usable ? "" : "opacity:0.55;"}">
+                 ${prov.emoji} ${escHtml(prov.label)}${lockSuffix}
                </div>`;
       for (const m of models) {
         const active = m.value === curVal;
         const label = m.custom ? `✨ ${escHtml(m.label)}` : escHtml(m.label);
-        html += `<div class="cc-popover-item" data-val="${escAttr(m.value)}" data-prov="${key}"${active ? ' data-active="1"' : ""}>
+        html += `<div class="cc-popover-item${usable ? "" : " cc-popover-item-disabled"}"
+                      data-val="${escAttr(m.value)}" data-prov="${key}"
+                      ${active ? 'data-active="1"' : ""}
+                      ${usable ? "" : 'data-locked="1"'}
+                      style="${usable ? "" : "opacity:0.55;"}">
                    <span class="cc-popover-icon">${active ? "✓" : ""}</span>
                    <span>${label}</span>
                  </div>`;
       }
+    }
+    // Empty-state nudge — when nothing is usable, point the user at the
+    // dedicated Settings screen instead of leaving them with a dropdown
+    // that only offers "Server default".
+    if (usableCount === 0) {
+      html += `<div class="cc-popover-section-label" style="color:#f9e2af;">
+                 ⚠ No LLM key configured
+               </div>
+               <div class="cc-popover-item" data-action="open-providers">
+                 <span class="cc-popover-icon">⚙</span>
+                 <span>Open Settings → Providers…</span>
+               </div>
+               <div class="cc-popover-item" data-action="open-custom-models">
+                 <span class="cc-popover-icon">✨</span>
+                 <span>Add a custom model…</span>
+               </div>`;
     }
     _modelPopover.innerHTML = html;
     // Position near the chip.
@@ -3048,6 +3183,37 @@ function createComfyClawPanel() {
     // Wire item clicks.
     _modelPopover.querySelectorAll(".cc-popover-item").forEach((item) => {
       item.addEventListener("click", () => {
+        // Action items (empty-state nudges) bypass the model-select path.
+        const action = item.dataset.action;
+        if (action === "open-providers") {
+          if (!_settingsModal) _settingsModal = createSettingsModal();
+          _settingsModal.openTo("providers");
+          _modelPopover.dataset.open = "0";
+          return;
+        }
+        if (action === "open-custom-models") {
+          if (!_settingsModal) _settingsModal = createSettingsModal();
+          _settingsModal.openTo("providers", "cc-custom-models-section");
+          _modelPopover.dataset.open = "0";
+          return;
+        }
+        // Locked rows (provider has no key) bounce to Settings instead of
+        // silently letting the user pick an unusable model.
+        if (item.dataset.locked === "1") {
+          const provKey = item.dataset.prov;
+          const anchor = provKey === "custom"
+            ? "cc-custom-models-section"
+            : `cc-prov-card-${provKey}`;
+          if (!_settingsModal) _settingsModal = createSettingsModal();
+          _settingsModal.openTo("providers", anchor);
+          showToast(
+            `${PROVIDERS[provKey]?.label || provKey} needs an API key first.`,
+            "warning",
+            3500,
+          );
+          _modelPopover.dataset.open = "0";
+          return;
+        }
         const v = item.dataset.val ?? "";
         const provKey = item.dataset.prov;
         if (provKey) _setActiveProvider(provKey);
@@ -3962,15 +4128,18 @@ function createComfyClawPanel() {
       _authModal._setStatus("You can close this and start generating.", "ok");
     };
     _authModal._showFailure = (detail) => {
+      // Server-side failure messages may include multi-line hints with
+      // markdown-ish bullet points (see CodexAuthFlow._finish).  Preserve
+      // newlines by rendering with ``white-space:pre-wrap`` so the bullet
+      // list isn't collapsed into one run-on sentence.
       stepEl.innerHTML = `
         <div style="display:flex;align-items:flex-start;gap:10px;color:var(--cc-accent-red);">
           <span style="font-size:18px;">✕</span>
           <div>
             <div style="font-weight:600;">Sign-in failed</div>
             <div style="font-size:11px;color:var(--cc-fg-muted);margin-top:4px;
-                        line-height:1.5;word-break:break-word;">
-              ${escHtml(detail || "")}
-            </div>
+                        line-height:1.5;word-break:break-word;
+                        white-space:pre-wrap;">${escHtml(detail || "")}</div>
             <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">
               <button class="cc-auth-retry"
                       style="background:var(--cc-accent);color:var(--cc-bg);
@@ -3979,10 +4148,10 @@ function createComfyClawPanel() {
                 Try again
               </button>
               <button class="cc-auth-try-other"
-                      style="background:transparent;border:1px solid var(--cc-border);
-                             color:var(--cc-fg);border-radius:6px;padding:6px 14px;
-                             font-size:12px;cursor:pointer;">
-                Try ${mode === "device_code" ? "browser" : "device code"} instead
+                      style="background:var(--cc-accent);color:var(--cc-bg);
+                             border:none;border-radius:6px;padding:6px 14px;
+                             font-size:12px;font-weight:600;cursor:pointer;">
+                Switch to ${mode === "device_code" ? "browser" : "device code"} sign-in
               </button>
             </div>
           </div>

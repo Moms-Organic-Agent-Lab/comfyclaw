@@ -159,7 +159,7 @@ export ANTHROPIC_API_KEY=...   # for the vision verifier
 
 uv run comfyclaw run \
   --agent-backend codex \
-  --model openai/o4-mini \
+  --model openai/gpt-5.4-mini \
   --verifier-model anthropic/claude-sonnet-4-5 \
   --mode copilot \
   --iterations 3 \

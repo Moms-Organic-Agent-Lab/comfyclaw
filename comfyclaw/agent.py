@@ -472,7 +472,7 @@ class ClawAgent:
                       that LiteLLM can pick it up automatically.  You can also
                       set the env-var directly and leave this empty.
     model           : LiteLLM model string, e.g. ``"anthropic/claude-sonnet-4-5"``,
-                      ``"openai/gpt-4o"``, ``"gemini/gemini-2.0-flash"``,
+                      ``"openai/gpt-5.4"``, ``"gemini/gemini-2.0-flash"``,
                       ``"ollama/llama3.1"``.
     server_address  : ComfyUI HTTP address (used for model queries).
     skills_dir      : Path to skills/ folder; ``None`` uses built-in skills.

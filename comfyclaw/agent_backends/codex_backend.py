@@ -3,7 +3,7 @@ CodexBackend — drive OpenAI's Codex CLI (``codex``) as the agent.
 
 Codex's headless mode is::
 
-    codex exec [-m MODEL] [--json] "<prompt>"
+    codex exec --json --skip-git-repo-check --sandbox read-only [-m MODEL] "<prompt>"
 
 It does NOT speak the Anthropic ``tool_use`` block protocol.  We
 therefore use the JSON-envelope protocol from
@@ -11,14 +11,28 @@ therefore use the JSON-envelope protocol from
 envelope describing the tool calls it wants, and we echo the results
 back on the next turn.
 
+The event taxonomy we parse from ``codex exec --json`` is identical to
+the one the official ``@openai/codex-sdk`` Node SDK exposes (see
+``reference/openai-codex.js``): each line is a JSON object with a
+``type`` field (``item.started`` / ``item.updated`` / ``item.completed``
+/ ``turn.failed`` / ``error`` / etc.) and an ``item`` payload whose
+``type`` is one of ``agent_message`` / ``reasoning`` / ``command_execution``
+/ ``file_change`` / ``mcp_tool_call`` / ``web_search`` / ``todo_list``.
+The model's actual text reply lives at ``item.completed`` events whose
+``item.type == "agent_message"``; everything else is internal noise we
+filter out before feeding text to the envelope parser.
+
 Authentication is the CLI's responsibility (``codex login`` or
 ``OPENAI_API_KEY`` in the environment).
 """
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
+import subprocess
+import threading
 
 from . import _stream_session
 from .base import DispatchFn, EventFn
@@ -28,6 +42,65 @@ _CODEX_BIN_ENV = "COMFYCLAW_CODEX_BIN"
 
 def _codex_bin() -> str:
     return os.environ.get(_CODEX_BIN_ENV, "").strip() or "codex"
+
+
+def _extract_agent_message_text(line: str) -> str:
+    """Pull the agent's text reply out of one ``codex exec --json`` event line.
+
+    Returns the message text for ``item.completed`` events with
+    ``item.type == "agent_message"``; an empty string otherwise.  Older
+    codex builds that flattened the event into ``{"agent_message": …}``
+    are still picked up via the legacy fallback so the same module
+    works across CLI versions.
+    """
+    line = line.strip()
+    if not line or not line.startswith("{"):
+        return ""
+    try:
+        evt = json.loads(line)
+    except json.JSONDecodeError:
+        return ""
+
+    etype = (evt.get("type") or "").lower()
+    if etype == "item.completed":
+        item = evt.get("item") or {}
+        if (item.get("type") or "").lower() == "agent_message":
+            text = item.get("text") or ""
+            return text if isinstance(text, str) else ""
+        return ""
+
+    # Legacy flat-shape codex builds (pre-SDK schema).
+    payload = (
+        evt.get("agent_message")
+        or evt.get("text")
+        or evt.get("delta")
+        or evt.get("content")
+    )
+    if isinstance(payload, str):
+        return payload
+    if isinstance(payload, dict):
+        nested = payload.get("text") or payload.get("content")
+        if isinstance(nested, str):
+            return nested
+    return ""
+
+
+def _is_turn_failure(line: str) -> tuple[bool, str]:
+    """Detect ``turn.failed``/``error`` events and return their message."""
+    line = line.strip()
+    if not line.startswith("{"):
+        return False, ""
+    try:
+        evt = json.loads(line)
+    except json.JSONDecodeError:
+        return False, ""
+    etype = (evt.get("type") or "").lower()
+    if etype not in {"turn.failed", "error"}:
+        return False, ""
+    err = evt.get("error") or evt.get("message") or ""
+    if isinstance(err, dict):
+        err = err.get("message") or err.get("error") or json.dumps(err)
+    return True, str(err)
 
 
 class CodexBackend:
@@ -52,47 +125,134 @@ class CodexBackend:
         max_rounds: int = 40,
     ) -> str:
         bin_path = self._bin
-        model = self.model
+
+        # Mirror the ``threadOptions`` the @openai/codex-sdk reference passes
+        # (see ``reference/openai-codex.js`` ~L395):
+        #   skipGitRepoCheck: true  → --skip-git-repo-check  (without this,
+        #                             codex blocks on a "not a git repo,
+        #                             continue?" prompt when launched outside
+        #                             a git repo and stdin is non-interactive)
+        #   sandboxMode             → --sandbox read-only    (the envelope
+        #                             protocol means *we* dispatch the tools,
+        #                             codex only needs to emit text)
+        # ``codex exec`` already implies a non-interactive ``approvalPolicy:
+        # never``, so no explicit flag for that.
+        base_argv: list[str] = [
+            bin_path,
+            "exec",
+            "--json",
+            "--skip-git-repo-check",
+            "--sandbox", "read-only",
+        ]
+        # Codex's allowed-model list is bound to the user's ChatGPT
+        # subscription — it does NOT overlap with the LiteLLM model
+        # dropdown.  Forwarding e.g. ``openai/gpt-5.5`` produces ``model
+        # not supported with ChatGPT account``.  We also need to win
+        # over any model the user has pinned in ``~/.codex/config.toml``
+        # (which would otherwise be picked up as the silent default),
+        # so we use ``-c model=…`` instead of ``-m`` to apply the
+        # override for this invocation only without touching the user's
+        # config file.  Operator can override via ``COMFYCLAW_CODEX_MODEL``.
+        codex_model = (
+            os.environ.get("COMFYCLAW_CODEX_MODEL", "").strip() or "gpt-5.5"
+        )
+        base_argv += ["-c", f'model="{codex_model}"']
+
+        # Mute codex's internal log surfaces — these otherwise leak into
+        # the user's agent log as scary "ERROR codex_core::session:
+        # failed to record rollout items" lines that have nothing to do
+        # with the request.
+        env = {
+            **os.environ,
+            "RUST_LOG": "off",
+            "CODEX_LOG_LEVEL": "error",
+            "NO_COLOR": "1",
+        }
 
         def _invoke(prompt: str) -> str:
-            argv: list[str] = [bin_path, "exec", "--json"]
-            if model:
-                argv += ["-m", model]
-            argv.append(prompt)
-            rc, out, err = _stream_session.run_cli_oneshot(argv, "", timeout=420)
-            if rc != 0 and not out:
-                # codex sometimes prints prose to stderr on auth issues
-                raise RuntimeError(f"codex rc={rc}: {err[:200]}")
-            text = out or err
-            # Codex emits structured JSON event lines. Concatenate any "agent"
-            # message text (heuristic — accepts both flat and nested shapes).
-            joined: list[str] = []
-            for line in text.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                if line.startswith("{"):
-                    try:
-                        import json as _j
+            argv = base_argv + [prompt]
+            try:
+                proc = subprocess.Popen(
+                    argv,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,
+                    env=env,
+                )
+            except FileNotFoundError as exc:
+                raise RuntimeError(f"codex not on PATH: {exc}") from exc
 
-                        evt = _j.loads(line)
-                    except Exception:
+            agent_text_parts: list[str] = []
+            turn_error: str = ""
+
+            # Drain stderr concurrently so codex can't stall on a full
+            # pipe.  We only keep its tail to enrich error messages.
+            stderr_lines: list[str] = []
+            stderr_done = threading.Event()
+
+            def _drain_stderr() -> None:
+                assert proc.stderr is not None
+                try:
+                    for raw in iter(proc.stderr.readline, ""):
+                        if raw.strip():
+                            stderr_lines.append(raw.rstrip("\n"))
+                finally:
+                    stderr_done.set()
+
+            stderr_thread = threading.Thread(
+                target=_drain_stderr, daemon=True, name="codex-stderr-drain"
+            )
+            stderr_thread.start()
+
+            # Stream stdout line-by-line.  Forward "thinking" updates to
+            # ``on_event`` so the agent log shows progress instead of a
+            # frozen "Starting codex session…" placeholder while codex
+            # generates its reply.
+            assert proc.stdout is not None
+            try:
+                for raw in iter(proc.stdout.readline, ""):
+                    line = raw.rstrip("\n")
+                    if not line:
                         continue
-                    payload = (
-                        evt.get("agent_message")
-                        or evt.get("text")
-                        or evt.get("delta")
-                        or evt.get("content")
-                    )
-                    if isinstance(payload, str):
-                        joined.append(payload)
-                    elif isinstance(payload, dict):
-                        nested = payload.get("text") or payload.get("content")
-                        if isinstance(nested, str):
-                            joined.append(nested)
-                else:
-                    joined.append(line)
-            return "\n".join(joined) if joined else text
+                    failed, err = _is_turn_failure(line)
+                    if failed:
+                        turn_error = err
+                        continue
+                    text = _extract_agent_message_text(line)
+                    if not text:
+                        continue
+                    agent_text_parts.append(text)
+                    if on_event:
+                        preview = text.strip().splitlines()[0] if text.strip() else ""
+                        on_event(
+                            "thinking",
+                            preview[:160] + ("…" if len(preview) > 160 else ""),
+                            "",
+                            None,
+                        )
+            finally:
+                try:
+                    rc = proc.wait(timeout=420)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    rc = -9
+                stderr_done.wait(timeout=2.0)
+
+            if turn_error:
+                raise RuntimeError(f"codex turn failed: {turn_error}")
+
+            if rc != 0 and not agent_text_parts:
+                tail = "\n".join(stderr_lines[-12:]).strip() or "no stderr"
+                raise RuntimeError(f"codex rc={rc}: {tail[:300]}")
+
+            # The LAST ``agent_message`` is the model's actual reply —
+            # earlier ones are intermediate thoughts that codex emits
+            # while reasoning through its own internal turn loop, and
+            # joining them would shove non-envelope text in front of the
+            # JSON envelope and break the parser.
+            return agent_text_parts[-1].strip() if agent_text_parts else ""
 
         return _stream_session.run_envelope_loop(
             backend_name="codex",

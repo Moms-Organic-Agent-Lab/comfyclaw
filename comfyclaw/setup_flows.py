@@ -698,7 +698,32 @@ class CodexAuthFlow(_BaseFlow):
             return
 
         tail = "\n".join(self._stdout_buffer[-5:]) or detail
+        # Detect the specific failure mode where the npm-shipped codex JS
+        # wrapper can't spawn its bundled native (Gatekeeper quarantine,
+        # missing exec bit, etc.).  The stdout includes a Node.js spawn
+        # error dump mentioning the native binary path under
+        # ``codex-darwin-arm64/vendor/.../codex/codex``.  Surface a
+        # clearer message + workaround when we recognise it.
+        full_buf = "\n".join(self._stdout_buffer)
+        lower = full_buf.lower()
+        wrapper_spawn_failed = (
+            "spawnargs" in lower
+            and "codex-darwin" in lower
+            or "codex-linux" in lower
+        )
         if rc != 0:
+            if wrapper_spawn_failed and self._mode == "browser":
+                self._on_complete(
+                    False,
+                    "Codex's npm wrapper couldn't launch its bundled native "
+                    "binary for the browser sign-in.  Two workarounds:\n"
+                    "  • Try again in **device-code** mode (works around the "
+                    "wrapper entirely), or\n"
+                    "  • Reinstall via Homebrew: "
+                    "`brew install codex` — that ships a single-binary "
+                    "codex that avoids the npm spawn dance.",
+                )
+                return
             self._on_complete(
                 False,
                 f"codex login exited with code {rc}: {tail[-300:]}",

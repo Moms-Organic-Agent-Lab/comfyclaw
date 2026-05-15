@@ -155,7 +155,7 @@ class ClawVerifier:
                     env-var so LiteLLM can pick it up automatically.  You can
                     also set the env-var directly and leave this empty.
     model         : LiteLLM model string (must support vision), e.g.
-                    ``"anthropic/claude-sonnet-4-5"``, ``"openai/gpt-4o"``,
+                    ``"anthropic/claude-sonnet-4-5"``, ``"openai/gpt-5.4"``,
                     ``"gemini/gemini-2.0-flash"``, ``"ollama/llava"``.
     score_weights : ``(requirement_weight, detail_weight)`` summing to 1.0.
                     Defaults to ``(0.6, 0.4)``.

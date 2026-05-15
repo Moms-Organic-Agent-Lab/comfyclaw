@@ -936,7 +936,7 @@ def _build_parser() -> argparse.ArgumentParser:
             metavar="MODEL",
             help=(
                 "LiteLLM model string for the agent, e.g. 'anthropic/claude-sonnet-4-5', "
-                "'openai/gpt-4o', 'gemini/gemini-2.0-flash', 'ollama/llama3.1'. "
+                "'openai/gpt-5.4', 'gemini/gemini-2.0-flash', 'ollama/llama3.1'. "
                 "Set the matching provider API key env-var."
             ),
         )
@@ -947,7 +947,7 @@ def _build_parser() -> argparse.ArgumentParser:
             help=(
                 "LiteLLM model string for the vision verifier (must support images). "
                 "Defaults to the same value as --model. "
-                "Example: --model ollama/llama3.1 --verifier-model openai/gpt-4o"
+                "Example: --model ollama/llama3.1 --verifier-model openai/gpt-5.4"
             ),
         )
         p.add_argument(
