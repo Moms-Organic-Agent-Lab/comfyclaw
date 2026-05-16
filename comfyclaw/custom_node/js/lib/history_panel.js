@@ -208,9 +208,20 @@ export function createHistoryTab({ onReusePrompt } = {}) {
         `;
         a.onmouseenter = () => { a.style.transform = "scale(1.03)"; a.style.borderColor = "var(--cc-accent)"; };
         a.onmouseleave = () => { a.style.transform = ""; a.style.borderColor = "var(--cc-border)"; };
-        a.innerHTML = `<img src="${url}" alt=""
-          loading="lazy"
-          style="width:100%;height:100%;object-fit:cover;display:block;">`;
+        const fn = (img.filename || "").toLowerCase();
+        const isVideo = fn.endsWith(".mp4") || fn.endsWith(".webm");
+        const isAnimated = fn.endsWith(".gif") || fn.endsWith(".webp") || fn.endsWith(".apng");
+        if (isVideo) {
+          a.innerHTML = `<video src="${url}" autoplay loop muted playsinline
+            style="width:100%;height:100%;object-fit:cover;display:block;"></video>`;
+        } else if (isAnimated) {
+          // GIF / animated WEBP — <img> auto-plays the animation.
+          a.innerHTML = `<img src="${url}" alt="" loading="lazy"
+            style="width:100%;height:100%;object-fit:cover;display:block;">`;
+        } else {
+          a.innerHTML = `<img src="${url}" alt="" loading="lazy"
+            style="width:100%;height:100%;object-fit:cover;display:block;">`;
+        }
         gal.appendChild(a);
       }
       card.appendChild(gal);

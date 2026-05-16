@@ -44,6 +44,7 @@ import { app } from "../../scripts/app.js";
 import { injectStyles } from "./lib/styles.js";
 import { createTabStrip } from "./panel/tabs.js";
 import { createModeToggle } from "./lib/mode_toggle.js";
+import { createModalityToggle } from "./lib/modality_toggle.js";
 import { createBackendPicker } from "./lib/backend_picker.js";
 import { createSkillsTab } from "./lib/skills_panel.js";
 import { createHistoryTab } from "./lib/history_panel.js";
@@ -3200,6 +3201,7 @@ function createComfyClawPanel() {
     const _agentModel = _isCliBackend(agentBackend)
       ? _cliModelFor(agentBackend)
       : panel.querySelector("#comfyclaw-gen-model").value;
+    const modality = _modalityToggleRef?.value() || "image";
     _activeSyncClient.ws.send(JSON.stringify({
       type: "trigger_generation",
       connection_id: _CONNECTION_ID,
@@ -3216,6 +3218,9 @@ function createComfyClawPanel() {
         api_key: _pp.api_key || panel.querySelector("#comfyclaw-gen-apikey").value.trim() || undefined,
         api_base: _pp.api_base || undefined,
         dry_run: dryRun,
+        // Always pin modality explicitly so a `comfyclaw serve-video` server
+        // default doesn't bleed into image triggers and vice versa.
+        modality,
       },
     }));
     _lastGenState = null;
@@ -4643,6 +4648,7 @@ let _scoreboardSink = null;   // (msg) => void; bound by tab augmentation
 let _historyTabRef = null;   // .startRun / .endRun / .addImage / .addIterationScore
 let _skillsTabRef = null;
 let _modeToggleRef = null;
+let _modalityToggleRef = null;
 let _backendPickerRef = null;
 let _tabStripRef = null;   // .setBadge / .activate / .value
 let _lastGenState = null;   // "done" | "dry_run" | "error" — for History.endRun
@@ -4713,7 +4719,7 @@ function _augmentPanelWithTabs(panel) {
     tabs: [
       {
         id: "generate", label: "Generate", icon: "✨",
-        title: "Compose prompts and run the agent"
+        title: "Compose prompts and run the agent (image or video)"
       },
       {
         id: "skills", label: "Skills", icon: "📚",
@@ -4722,7 +4728,7 @@ function _augmentPanelWithTabs(panel) {
       },
       {
         id: "history", label: "History", icon: "🖼",
-        title: "Past generations with iteration scores and image previews"
+        title: "Past generations with iteration scores and previews"
       },
     ],
   });
@@ -4790,6 +4796,11 @@ function _augmentPanelWithTabs(panel) {
         modePill.style.borderColor = colorMap[m] || "var(--cc-border)";
       }
     };
+
+    // Modality toggle (Image / Video) sits ABOVE the mode toggle.
+    const modalityToggle = createModalityToggle();
+    _modalityToggleRef = modalityToggle;
+    legacyModeRow.parentElement.insertBefore(modalityToggle.root, legacyModeRow);
 
     const modeToggle = createModeToggle({
       onChange: _applyModeToAdvanced,
@@ -5282,23 +5293,22 @@ class SyncClient {
         });
       }
       // Phase 4: feed images into the History tab.
-      if (_historyTabRef && Array.isArray(msg.images)) {
-        for (const img of msg.images) {
+      const _completedImgs = Array.isArray(msg.images) && msg.images.length
+        ? msg.images
+        : (msg.image ? [msg.image] : []);
+      if (_historyTabRef) {
+        for (const img of _completedImgs) {
           _historyTabRef.addImage({
-            filename: img.filename || img,
+            filename: img.filename || img || "",
             subfolder: img.subfolder || "",
             type: img.type || "output",
             iteration: msg.iterations_used,
           });
         }
-      } else if (_historyTabRef && msg.image) {
-        _historyTabRef.addImage({
-          filename: msg.image.filename || "",
-          subfolder: msg.image.subfolder || "",
-          type: msg.image.type || "output",
-          iteration: msg.iterations_used,
-        });
       }
+      // Video / animated clip results render inline in the History tab — the
+      // existing `<video>` / `<img>` branch in history_panel.js picks the
+      // right element based on the filename's extension.
       console.log("[ComfyClaw] Generation complete:", msg);
     } else if (msg.type === "iteration_score") {
       // Phase 4: live scoreboard card in the agent log + History timeline.

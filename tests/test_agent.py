@@ -21,9 +21,12 @@ def _make_agent(
     agent = ClawAgent.__new__(ClawAgent)
     agent.model = "anthropic/claude-test"
     agent.server_address = server_address
-    from comfyclaw.skill_manager import SkillManager
+    from comfyclaw.skill_manager import SkillsRegistry
 
-    agent.skill_manager = SkillManager(None)  # built-in skills
+    # Empty registry — tests mock all tool dispatch and never inspect skills.
+    agent.skill_manager = SkillsRegistry(
+        include_builtin_root=False, include_user_root=False
+    )
     agent.on_change = None
     agent.on_agent_event = None
     agent.max_tool_rounds = 10

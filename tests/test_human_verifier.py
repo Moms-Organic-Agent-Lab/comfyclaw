@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from comfyclaw.human_verifier import HumanVerifier, HybridVerifier
+from comfyclaw.human_verifier import HumanVerifier, HybridVerifier, _sniff_extension
 from comfyclaw.verifier import VerifierResult
 
 # ---------------------------------------------------------------------------
@@ -45,6 +45,48 @@ def vlm_result() -> VerifierResult:
         overall_assessment="Decent image with some blur issues.",
         evolution_suggestions=["add depth ControlNet"],
     )
+
+
+# ---------------------------------------------------------------------------
+# Magic-byte sniffing for temp file extension
+# ---------------------------------------------------------------------------
+
+
+class TestSniffExtension:
+    def test_png(self, png_bytes: bytes) -> None:
+        assert _sniff_extension(png_bytes) == ".png"
+
+    def test_mp4(self) -> None:
+        # 'ftyp' at offset 4 is the MP4 brand marker.
+        assert _sniff_extension(b"\x00\x00\x00\x20ftypmp42") == ".mp4"
+
+    def test_webm(self) -> None:
+        # EBML header — also used by Matroska / WebM.
+        assert _sniff_extension(b"\x1a\x45\xdf\xa3rest_of_header") == ".webm"
+
+    def test_animated_webp(self) -> None:
+        assert _sniff_extension(b"RIFF\x00\x00\x00\x00WEBPVP8X") == ".webp"
+
+    def test_gif(self) -> None:
+        assert _sniff_extension(b"GIF89a") == ".gif"
+
+    def test_video_round_trip_uses_correct_extension(
+        self, mock_sync, tmp_path
+    ) -> None:
+        """A video blob handed to HumanVerifier must land on disk as a video
+        file, not as a corrupted .png."""
+        mp4 = b"\x00\x00\x00\x20ftypmp42" + b"\x00" * 64
+        mock_sync.wait_for_human_feedback.return_value = {
+            "text": "ok", "score": 0.8, "action": "accept",
+        }
+        verifier = HumanVerifier(sync_server=mock_sync, output_dir=str(tmp_path))
+        verifier.verify(mp4, "a fox", iteration=1)
+        # request_feedback was called with the saved path — extension must be .mp4
+        kwargs = mock_sync.request_feedback.call_args.kwargs
+        saved = kwargs.get("image_path", "")
+        assert saved.endswith(".mp4"), (
+            f"video blob should be saved with .mp4 extension, got {saved!r}"
+        )
 
 
 # ---------------------------------------------------------------------------

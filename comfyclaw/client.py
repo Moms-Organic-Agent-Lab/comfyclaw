@@ -153,3 +153,64 @@ class ComfyClient:
             for img in node_output.get("images", []):
                 images.append(self.get_image(img["filename"], img["subfolder"], img["type"]))
         return images
+
+    def collect_videos(self, history_entry: dict) -> list[tuple[bytes, str]]:
+        """
+        Extract all video outputs from a history entry.
+
+        ComfyUI video nodes report their outputs under a handful of keys
+        depending on which save node was used:
+
+        * ``videos``  — ``VHS_VideoCombine`` / native ``SaveVideo`` (mp4 / webm).
+        * ``gifs``    — ``VHS_VideoCombine`` when format is gif / webp.
+        * ``images``  — ``SaveAnimatedWEBP`` / ``SaveAnimatedPNG``; the entry's
+          ``filename`` extension is ``.webp`` / ``.png`` even though the key is
+          ``images``.
+
+        Returns
+        -------
+        list of ``(raw_bytes, mime_type)`` tuples in the order ComfyUI reported
+        them.  Caller is responsible for picking the primary output.
+        """
+        out: list[tuple[bytes, str]] = []
+        for node_output in history_entry.get("outputs", {}).values():
+            for key in ("videos", "gifs"):
+                for v in node_output.get(key, []):
+                    data = self.get_image(v["filename"], v["subfolder"], v["type"])
+                    out.append((data, _guess_video_mime(v["filename"], v.get("format"))))
+            # SaveAnimatedWEBP / SaveAnimatedPNG report under "images" but the
+            # extension reveals they're really animated.
+            for img in node_output.get("images", []):
+                fn = img.get("filename", "").lower()
+                if fn.endswith((".webp", ".gif", ".apng")):
+                    data = self.get_image(img["filename"], img["subfolder"], img["type"])
+                    out.append((data, _guess_video_mime(fn, None)))
+        return out
+
+
+def _guess_video_mime(filename: str, hint: str | None) -> str:
+    """Return a sensible MIME type for a video / animation filename."""
+    fn = (filename or "").lower()
+    if hint:
+        hint = hint.lower()
+        if "/" in hint:
+            return hint
+        if hint in ("mp4", "h264", "avc"):
+            return "video/mp4"
+        if hint == "webm":
+            return "video/webm"
+        if hint == "gif":
+            return "image/gif"
+        if hint == "webp":
+            return "image/webp"
+    if fn.endswith(".mp4"):
+        return "video/mp4"
+    if fn.endswith(".webm"):
+        return "video/webm"
+    if fn.endswith(".gif"):
+        return "image/gif"
+    if fn.endswith(".webp"):
+        return "image/webp"
+    if fn.endswith((".apng", ".png")):
+        return "image/apng"
+    return "application/octet-stream"

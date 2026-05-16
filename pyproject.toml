@@ -76,8 +76,12 @@ comfyclaw = "comfyclaw.cli:main"
 sync = ["websockets>=12"]
 # Direct Anthropic SDK (not required — litellm bundles provider support)
 anthropic = ["anthropic>=0.25"]
+# Video-modality frame extraction (mp4 / webm). PIL handles GIF / WEBP /
+# APNG out of the box, so only install this extra if you actually need to
+# verify mp4/webm clips.
+video = ["imageio[ffmpeg]>=2.34"]
 # Full install (all extras)
-all = ["comfyclaw[sync]"]
+all = ["comfyclaw[sync,video]"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # uv dev dependency groups  (install with: uv sync --group dev)

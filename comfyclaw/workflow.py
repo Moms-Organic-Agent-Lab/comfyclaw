@@ -348,12 +348,20 @@ class WorkflowManager:
             errors.append("Workflow is empty — no nodes at all.")
             return errors
 
+        _OUTPUT_NODES = (
+            # Image savers
+            "SaveImage", "PreviewImage",
+            # Video savers (native + community)
+            "SaveAnimatedWEBP", "SaveAnimatedPNG", "SaveVideo",
+            "VHS_VideoCombine", "WanVideoDecode",
+        )
         has_output = any(
-            n.get("class_type") in ("SaveImage", "PreviewImage") for n in workflow.values()
+            n.get("class_type") in _OUTPUT_NODES for n in workflow.values()
         )
         if not has_output:
             errors.append(
-                "No output node (SaveImage or PreviewImage). "
+                "No output node (SaveImage / PreviewImage / SaveAnimatedWEBP / "
+                "SaveVideo / VHS_VideoCombine). "
                 "ComfyUI will reject with 'prompt_no_outputs'."
             )
 

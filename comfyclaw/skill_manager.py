@@ -19,12 +19,11 @@ Beyond the spec, ComfyClaw adds:
   • Live deletion of user-imported skills (built-ins can be disabled
     but never deleted).
 
-Backwards compatibility
------------------------
-The old ``SkillManager`` API (``build_available_skills_xml``,
-``get_body``, ``detect_relevant_skills``, ``skill_names``) is preserved
-on this class so existing callers in :mod:`comfyclaw.agent` keep
-working.  ``SkillManager`` is re-exported as an alias.
+Read API
+--------
+``build_available_skills_xml``, ``get_body``, ``detect_relevant_skills``,
+``skill_names`` — used by :mod:`comfyclaw.agent` to assemble the system
+prompt and answer ``read_skill`` tool calls. Stable; treat as public.
 """
 
 from __future__ import annotations
@@ -212,13 +211,18 @@ class SkillsRegistry:
         self,
         skills_dir: str | Path | None = None,
         *,
+        include_builtin_root: bool = True,
         include_user_root: bool = True,
         extra_roots: list[str | Path] | None = None,
         quiet: bool = False,
     ) -> None:
         # Roots are searched in order; later roots override earlier names.
+        # ``include_builtin_root`` / ``include_user_root`` exist so tests
+        # (and any future caller that wants a perfectly isolated registry)
+        # can opt out of the implicit roots without monkey-patching globals.
         roots: list[tuple[Path, str]] = []  # (path, source_label)
-        roots.append((_BUILTIN_SKILLS_DIR.resolve(), "builtin"))
+        if include_builtin_root:
+            roots.append((_BUILTIN_SKILLS_DIR.resolve(), "builtin"))
         if include_user_root:
             roots.append((_user_skills_root(), "user"))
         if skills_dir:
@@ -306,7 +310,7 @@ class SkillsRegistry:
         self._load_all()
 
     # ------------------------------------------------------------------
-    # Public read API (back-compat with SkillManager)
+    # Public read API (used by ClawAgent to build the system prompt)
     # ------------------------------------------------------------------
 
     @property
@@ -517,31 +521,3 @@ class SkillsRegistry:
         return [(str(p), s) for p, s in self._roots]
 
 
-# ---------------------------------------------------------------------------
-# Backwards-compatible single-root view — every existing caller still uses
-# this name (and existing tests assume single-root behaviour).
-# ---------------------------------------------------------------------------
-
-
-class SkillManager(SkillsRegistry):
-    """Single-root variant: loads ONLY the directory passed in.
-
-    Provided for back-compat with the original :class:`SkillManager`
-    used by tests and downstream callers that don't want the built-in /
-    user roots layered in.  New code should use :class:`SkillsRegistry`.
-    """
-
-    def __init__(self, skills_dir: str | Path | None = None) -> None:
-        # ``include_user_root=False`` and skipping the built-in root keeps
-        # the legacy behaviour: one dir in, one set of skills out.
-        super().__init__(
-            skills_dir=skills_dir,
-            include_user_root=False,
-            extra_roots=None,
-        )
-
-    def _load_all(self) -> None:  # type: ignore[override]
-        # Drop the built-in root injected by SkillsRegistry.__init__ so this
-        # class genuinely scans only the user-supplied directory.
-        self._roots = [(p, s) for p, s in self._roots if s != "builtin"]
-        super()._load_all()

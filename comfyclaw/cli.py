@@ -273,13 +273,35 @@ def _ensure_comfyui_running(addr: str) -> str:
     return addr
 
 
+def _output_extension(blob: bytes) -> str:
+    """Pick the right file extension by sniffing magic bytes."""
+    if not blob:
+        return ".bin"
+    if blob[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if blob[:2] == b"\xff\xd8":
+        return ".jpg"
+    if blob[:6] in (b"GIF87a", b"GIF89a"):
+        return ".gif"
+    if blob[:4] == b"RIFF" and blob[8:12] == b"WEBP":
+        return ".webp"
+    if blob[4:8] == b"ftyp":
+        return ".mp4"
+    if blob[:4] == b"\x1a\x45\xdf\xa3":
+        return ".webm"
+    return ".bin"
+
+
 def _save_image(image_bytes: bytes, prompt: str, output_dir: Path) -> Path:
+    """Save an image *or* video blob with the right extension auto-detected."""
     output_dir.mkdir(parents=True, exist_ok=True)
     slug = prompt[:40].replace(" ", "_").replace("/", "-")
     ts = int(time.time())
-    out = output_dir / f"comfyclaw_{ts}_{slug}.png"
+    ext = _output_extension(image_bytes)
+    out = output_dir / f"comfyclaw_{ts}_{slug}{ext}"
     out.write_bytes(image_bytes)
-    print(f"[cli] Image saved → {out}")
+    label = "Video" if ext in (".mp4", ".webm", ".gif", ".webp") else "Image"
+    print(f"[cli] {label} saved → {out}")
     return out
 
 
@@ -327,6 +349,8 @@ def _cmd_run(args: argparse.Namespace, dry: bool = False) -> None:
         verifier_mode=derived_verifier,
         agent_backend=getattr(args, "agent_backend", "litellm"),
         run_mode=run_mode,
+        modality=getattr(args, "modality", "image"),
+        video_frames=getattr(args, "video_frames", 6),
     )
 
     verifier_label = cfg.verifier_model or f"{cfg.model} (shared)"
@@ -339,6 +363,9 @@ def _cmd_run(args: argparse.Namespace, dry: bool = False) -> None:
     if cfg.verifier_mode in ("vlm", "hybrid"):
         print(f"[cli] Verifier model : {verifier_label}")
     print(f"[cli] Image model    : {cfg.image_model or '(from workflow)'}")
+    print(f"[cli] Modality       : {cfg.modality}")
+    if cfg.modality == "video":
+        print(f"[cli] Video frames   : {cfg.video_frames}")
     print(f"[cli] Iterations     : {cfg.max_iterations}  Threshold: {cfg.success_threshold}")
     print(f"[cli] Dry-run        : {dry}")
     print(f"[cli] Sync port      : {cfg.sync_port or 'disabled'}")
@@ -393,6 +420,8 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         "max_repair_attempts": args.max_repair_attempts,
         "agent_backend": getattr(args, "agent_backend", "litellm"),
         "run_mode": getattr(args, "mode", "auto"),
+        "modality": getattr(args, "modality", "image"),
+        "video_frames": getattr(args, "video_frames", 6),
     }
 
     # ── Print the config block first ────────────────────────────────────
@@ -401,6 +430,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     print(f"[cli] Agent model    : {args.model}")
     print(f"[cli] Verifier model : {base_cfg['verifier_model'] or '(same as agent)'}")
     print(f"[cli] Run mode       : {base_cfg['run_mode']}")
+    print(f"[cli] Modality       : {base_cfg['modality']}")
     print(f"[cli] ComfyUI        : http://{addr}")
     print(f"[cli] Image model    : {base_cfg['image_model'] or '(from workflow)'}")
     print(f"[cli] Repair limit   : {base_cfg['max_repair_attempts']} attempt(s) per iteration")
@@ -540,6 +570,14 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             if trigger_backend:
                 run_cfg["agent_backend"] = trigger_backend
             run_cfg["run_mode"] = run_mode
+
+            # Modality may be selected per-trigger from the panel's video tab.
+            trigger_modality = (settings.get("modality") or "").strip().lower()
+            if trigger_modality in ("image", "video"):
+                run_cfg["modality"] = trigger_modality
+            trigger_video_frames = settings.get("video_frames")
+            if isinstance(trigger_video_frames, int) and trigger_video_frames > 0:
+                run_cfg["video_frames"] = trigger_video_frames
 
             # Manual mode = single round, no iteration loop.
             effective_iters = 1 if run_mode == "manual" else iterations
@@ -1037,6 +1075,30 @@ def _build_parser() -> argparse.ArgumentParser:
                 "trigger unless the panel explicitly overrides it."
             ),
         )
+        p.add_argument(
+            "--modality",
+            default=_env_str("COMFYCLAW_MODALITY", "image"),
+            choices=["image", "video"],
+            metavar="MODE",
+            help=(
+                "Output modality: 'image' (default) or 'video'. Video mode "
+                "collects animated outputs (mp4 / webm / animated WEBP / GIF) "
+                "from ComfyUI and scores them with a frame-sampling verifier. "
+                "The run-video / serve-video subcommands set this to 'video' "
+                "by default."
+            ),
+        )
+        p.add_argument(
+            "--video-frames",
+            type=int,
+            default=_env_int("COMFYCLAW_VIDEO_FRAMES", 6),
+            metavar="N",
+            help=(
+                "Number of frames to sample per clip for the video verifier. "
+                "Default 6 (first, last, and 4 evenly-spaced). Only used when "
+                "--modality=video."
+            ),
+        )
 
     run_p = sub.add_parser("run", help="Run the full agent–generate–verify loop")
     _add_run_args(run_p)
@@ -1052,6 +1114,29 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_run_args(serve_p, prompt_required=False)
     serve_p.set_defaults(func=_cmd_serve)
+
+    # Video parallels — same flags but modality defaults to "video".
+    def _force_video(parser: argparse.ArgumentParser) -> None:
+        for action in parser._actions:
+            if getattr(action, "dest", "") == "modality":
+                action.default = "video"
+                break
+
+    run_video_p = sub.add_parser(
+        "run-video",
+        help="One-shot video-mode agent–generate–verify loop",
+    )
+    _add_run_args(run_video_p)
+    _force_video(run_video_p)
+    run_video_p.set_defaults(func=lambda a: _cmd_run(a, dry=False))
+
+    serve_video_p = sub.add_parser(
+        "serve-video",
+        help="Persistent video-mode server — listens for triggers from the ComfyUI Video tab",
+    )
+    _add_run_args(serve_video_p, prompt_required=False)
+    _force_video(serve_video_p)
+    serve_video_p.set_defaults(func=_cmd_serve)
 
     inst_p = sub.add_parser("install-node", help="Symlink ComfyClaw-Sync custom node into ComfyUI")
     inst_p.add_argument(

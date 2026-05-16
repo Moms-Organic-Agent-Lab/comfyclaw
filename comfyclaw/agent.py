@@ -29,7 +29,7 @@ import urllib.request
 from collections.abc import Callable
 
 from .agent_backends import AgentBackend, ToolCall, get_backend
-from .skill_manager import SkillManager
+from .skill_manager import SkillsRegistry
 from .workflow import WorkflowManager
 
 # ---------------------------------------------------------------------------
@@ -503,7 +503,10 @@ class ClawAgent:
                 os.environ.setdefault("ANTHROPIC_API_KEY", api_key)
         self.model = model
         self.server_address = server_address
-        self.skill_manager = SkillManager(skills_dir)
+        # SkillsRegistry layers in built-in + user roots automatically, so
+        # the agent has its full skill recipe library even when callers
+        # construct a harness with ``skills_dir=None``.
+        self.skill_manager = SkillsRegistry(skills_dir=skills_dir)
         self.on_change = on_change
         self.on_agent_event: Callable[[str, str, str, dict | None], None] | None = None
         self.max_tool_rounds = max_tool_rounds

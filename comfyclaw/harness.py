@@ -98,6 +98,8 @@ class HarnessConfig:
     api_base: str | None = None
     agent_backend: str = "litellm"  # "litellm" | "claude-code" | "codex" | "gemini-cli"
     run_mode: str = "auto"  # "manual" | "auto" | "copilot"
+    modality: str = "image"  # "image" | "video"
+    video_frames: int = 6  # frames sampled per clip for the verifier
     """
     Pin the image-generation model (checkpoint / UNET) used by ComfyUI.
 
@@ -224,11 +226,21 @@ class ClawHarness:
         self._agent.on_agent_event = self._on_agent_event
         self._current_iteration = 0
 
-        vlm_verifier = ClawVerifier(
-            api_key=config.api_key,
-            model=config.verifier_model or config.model,
-            score_weights=config.score_weights,
-        )
+        if config.modality == "video":
+            from .video_verifier import VideoVerifier
+
+            vlm_verifier = VideoVerifier(
+                api_key=config.api_key,
+                model=config.verifier_model or config.model,
+                score_weights=config.score_weights,
+                n_frames=config.video_frames,
+            )
+        else:
+            vlm_verifier = ClawVerifier(
+                api_key=config.api_key,
+                model=config.verifier_model or config.model,
+                score_weights=config.score_weights,
+            )
 
         # run_mode is the user-facing knob; verifier_mode is derived.
         run_mode = (config.run_mode or "auto").lower()
@@ -571,14 +583,24 @@ class ClawHarness:
                         last_result = None
                         continue
 
-            images = self._client.collect_images(history)
-            if not images:
-                print("[ClawHarness] ⚠  No images in output — check workflow.")
-                self._evolution_log.record(evo)
-                continue
-
-            image_bytes = images[0]
-            print(f"[ClawHarness] 🖼  Got image ({len(image_bytes):,} bytes)")
+            if cfg.modality == "video":
+                videos = self._client.collect_videos(history)
+                if not videos:
+                    print("[ClawHarness] ⚠  No videos in output — check workflow.")
+                    self._evolution_log.record(evo)
+                    continue
+                image_bytes, _media_type = videos[0]
+                print(
+                    f"[ClawHarness] 🎬 Got video ({len(image_bytes):,} bytes, {_media_type})"
+                )
+            else:
+                images = self._client.collect_images(history)
+                if not images:
+                    print("[ClawHarness] ⚠  No images in output — check workflow.")
+                    self._evolution_log.record(evo)
+                    continue
+                image_bytes = images[0]
+                print(f"[ClawHarness] 🖼  Got image ({len(image_bytes):,} bytes)")
 
             # ── Verify (skipped in manual mode) ───────────────────────────
             if self._verifier is None:

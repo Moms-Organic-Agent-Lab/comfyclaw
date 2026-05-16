@@ -20,6 +20,30 @@ from pathlib import Path
 from .verifier import VerifierResult
 
 
+def _sniff_extension(blob: bytes) -> str:
+    """Pick the right file extension by sniffing magic bytes.
+
+    Used so that human-review temp files render in the panel regardless of
+    modality — a video blob written to a ``.png`` would otherwise show as a
+    broken image.
+    """
+    if not blob:
+        return ".png"
+    if blob[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if blob[:2] == b"\xff\xd8":
+        return ".jpg"
+    if blob[:6] in (b"GIF87a", b"GIF89a"):
+        return ".gif"
+    if blob[:4] == b"RIFF" and blob[8:12] == b"WEBP":
+        return ".webp"
+    if blob[4:8] == b"ftyp":
+        return ".mp4"
+    if blob[:4] == b"\x1a\x45\xdf\xa3":
+        return ".webm"
+    return ".png"
+
+
 class HumanVerifier:
     """Collect verification feedback from a human reviewer.
 
@@ -52,7 +76,8 @@ class HumanVerifier:
     def _save_temp_image(self, image_bytes: bytes, iteration: int) -> str:
         out_dir = Path(self._output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / f"comfyclaw_review_iter{iteration}.png"
+        ext = _sniff_extension(image_bytes)
+        path = out_dir / f"comfyclaw_review_iter{iteration}{ext}"
         path.write_bytes(image_bytes)
         return str(path)
 
@@ -168,7 +193,8 @@ class HybridVerifier:
     def _save_temp_image(self, image_bytes: bytes, iteration: int) -> str:
         out_dir = Path(self._output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / f"comfyclaw_review_iter{iteration}.png"
+        ext = _sniff_extension(image_bytes)
+        path = out_dir / f"comfyclaw_review_iter{iteration}{ext}"
         path.write_bytes(image_bytes)
         return str(path)
 
