@@ -86,8 +86,8 @@ export function createHistoryTab({ onReusePrompt } = {}) {
         <span class="cc-pill cc-hist-count" style="display:none;"></span>
       </div>
       <button class="cc-btn cc-btn-secondary cc-hist-clear"
-              style="padding:4px 10px;font-size:11px;" title="Clear history">
-        🗑 Clear
+              style="padding:6px 12px;font-size:12px;" title="Clear history">
+        <span style="font-size:14px;">🗑</span> Clear
       </button>
     </div>
     <div class="cc-hist-list cc-scroll" style="
@@ -175,7 +175,7 @@ export function createHistoryTab({ onReusePrompt } = {}) {
           </span>
           ${it.delta != null
             ? `<span style="color:${it.delta >= 0 ? "var(--cc-accent-green)" : "var(--cc-accent-red)"};
-                            font-size:10px;">${it.delta >= 0 ? "▲" : "▼"} ${Math.abs(it.delta).toFixed(2)}</span>`
+                            font-size:12px;line-height:1;">${it.delta >= 0 ? "▲" : "▼"} ${Math.abs(it.delta).toFixed(2)}</span>`
             : ""}
           <span style="color:var(--cc-fg-muted);flex:1;overflow:hidden;
                        text-overflow:ellipsis;white-space:nowrap;font-size:11px;">

@@ -89,10 +89,33 @@ const CSS = `
   to   { background-position: 28px 0; }
 }
 
-.cc-spin    { animation: cc-spin 1s linear infinite; display:inline-block; }
+.cc-spin    {
+  animation: cc-spin 1s linear infinite;
+  display: inline-block;
+  transform-origin: 50% 50%;
+  vertical-align: middle;
+}
 .cc-pulse   { animation: cc-pulse 1.6s ease-in-out infinite; }
 .cc-fadein  { animation: cc-fadein 0.18s ease-out forwards; }
 .cc-entry-in { animation: cc-fadein 0.15s ease-out; }
+
+/* Border-ring spinner — perfectly circular geometry, so rotation is
+   visually stable (text glyphs like ⟳ wobble because their visual
+   center doesn't match the box center). Use as a span/div. */
+.cc-spin-ring {
+  display: inline-block;
+  width: 14px; height: 14px;
+  border: 2px solid var(--cc-fg-faint);
+  border-top-color: var(--cc-accent);
+  border-radius: 50%;
+  box-sizing: border-box;
+  vertical-align: middle;
+  animation: cc-spin 0.85s linear infinite;
+  transform-origin: 50% 50%;
+  flex-shrink: 0;
+}
+.cc-spin-ring-sm { width: 12px; height: 12px; border-width: 2px; }
+.cc-spin-ring-lg { width: 18px; height: 18px; border-width: 2.5px; }
 
 /* Custom scrollbar everywhere we opt-in */
 #comfyclaw-think-log::-webkit-scrollbar,
@@ -112,23 +135,29 @@ const CSS = `
 .cc-copy-btn {
   position:absolute; top:6px; right:6px;
   background:var(--cc-border); border:none; color:var(--cc-fg);
-  border-radius:5px; padding:2px 8px; font-size:10px; cursor:pointer;
+  border-radius:5px; padding:3px 10px; font-size:12px; cursor:pointer;
   opacity:0; transition:opacity 0.15s; font-family:system-ui,sans-serif;
 }
 .cc-code-block:hover .cc-copy-btn { opacity:1; }
 .cc-log-entry { animation: cc-fadein 0.15s ease-out; }
 .cc-log-entry:hover .cc-msg-copy { opacity: 1 !important; }
-.cc-msg-copy { opacity: 0; transition: opacity 0.15s; }
+.cc-msg-copy { opacity: 0; transition: opacity 0.15s, background 0.15s, color 0.15s; }
+.cc-msg-copy:hover { background: var(--cc-surface); color: var(--cc-fg) !important; }
 
 /* ── Tabs ─────────────────────────────────────────────────────────────── */
 .cc-tab-button {
-  position: relative; flex: 1; padding: 9px 10px; border: none;
+  position: relative; flex: 1; padding: 11px 10px; border: none;
   background: transparent; color: var(--cc-fg-dim); cursor: pointer;
-  font: inherit; font-size: 12px; font-weight: 600;
+  font: inherit; font-size: 13px; font-weight: 600;
   border-bottom: 2px solid transparent;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
   letter-spacing: 0.2px;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  user-select: none;
+}
+.cc-tab-button:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--cc-accent-soft-2);
 }
 .cc-tab-button:hover {
   color: var(--cc-fg-muted);
@@ -140,9 +169,9 @@ const CSS = `
 }
 .cc-tab-pill {
   display: inline-flex; align-items: center; gap: 4px;
-  font-size: 9px; font-weight: 700;
+  font-size: 10px; font-weight: 700;
   background: var(--cc-surface-2); color: var(--cc-fg-muted);
-  border-radius: 9px; padding: 1px 6px; margin-left: 1px;
+  border-radius: 9px; padding: 2px 7px; margin-left: 1px;
   font-variant-numeric: tabular-nums;
 }
 .cc-tab-active .cc-tab-pill {
@@ -157,32 +186,43 @@ const CSS = `
 
 /* ── Chips (for backend picker, quick-prompts, etc.) ──────────────────── */
 .cc-chip {
-  display:inline-flex; align-items:center; gap:4px;
-  padding:3px 9px; border-radius:20px;
+  display:inline-flex; align-items:center; gap:5px;
+  padding:4px 11px; border-radius:20px;
   border:1px solid var(--cc-border); background:transparent;
-  color:var(--cc-fg-dim); cursor:pointer; font-size:11px;
+  color:var(--cc-fg-muted); cursor:pointer; font-size:12px;
   font-weight:600; transition:all 0.15s; white-space:nowrap;
+  line-height: 1.3;
 }
 .cc-chip:hover {
   border-color:var(--cc-accent); color:var(--cc-accent);
   background:var(--cc-accent-soft);
+}
+.cc-chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--cc-accent-soft-2);
+  border-color: var(--cc-accent);
 }
 .cc-chip.cc-chip-active {
   border-color:var(--cc-accent); color:var(--cc-accent);
   background:var(--cc-accent-soft-2);
 }
 
-/* ── Buttons ──────────────────────────────────────────────────────────── */
+/* ── Buttons (labeled, with text) ─────────────────────────────────────── */
 .cc-btn {
   border: none; border-radius: var(--cc-radius-sm);
-  padding: 8px 14px; cursor: pointer;
-  font-family: inherit; font-size: 12px; font-weight: 700;
-  transition: filter 0.15s, transform 0.05s, background 0.15s;
+  padding: 9px 14px; cursor: pointer;
+  font-family: inherit; font-size: 13px; font-weight: 600;
+  transition: filter 0.15s, transform 0.05s, background 0.15s, box-shadow 0.15s;
   display: inline-flex; align-items: center; justify-content: center;
   gap: 6px; line-height: 1;
+  user-select: none;
 }
 .cc-btn:hover { filter: brightness(1.08); }
-.cc-btn:active { transform: scale(0.98); }
+.cc-btn:active { transform: scale(0.97); }
+.cc-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--cc-accent-soft-2);
+}
 .cc-btn[disabled] { opacity:0.45; cursor:not-allowed; filter:none; }
 .cc-btn-primary { background: var(--cc-accent-green); color: var(--cc-bg); }
 .cc-btn-secondary {
@@ -195,22 +235,49 @@ const CSS = `
 .cc-btn-info { background: var(--cc-accent-blue); color: var(--cc-bg); }
 .cc-btn-warn { background: var(--cc-accent-yellow); color: var(--cc-bg); }
 
-/* Tiny header / inline icon button — used for ⚙ ▼ ↓ 🗑 etc. */
+/* Icon-only square button — used for ⚙ ▾ × 🗑 etc.
+ *
+ * Single source of truth for icon-button sizing. Three sizes:
+ *   .cc-icon-btn          → 36×36 / 20px (default, used in panel headers)
+ *   .cc-icon-btn.cc-icon-btn-sm → 32×32 / 18px (denser toolbars / lists)
+ *   .cc-icon-btn.cc-icon-btn-xs → 28×28 / 15px (compact inline clusters)
+ *
+ * Hover fills with surface-2 + visible border. Active scales 0.94 for tactile
+ * feedback. Focus shows an accent-soft ring for keyboard accessibility.
+ */
 .cc-icon-btn {
-  background: transparent; border: 1px solid transparent;
-  color: var(--cc-fg-dim); cursor: pointer;
-  width: 30px; height: 30px; padding: 0;
-  border-radius: var(--cc-radius-xs);
-  font-size: 16px; line-height: 1;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--cc-fg-muted);
+  cursor: pointer;
+  width: 36px; height: 36px; padding: 0;
+  border-radius: var(--cc-radius-sm);
+  font-size: 20px; font-weight: 500; line-height: 1;
   display: inline-flex; align-items: center; justify-content: center;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.05s;
+  user-select: none;
+  font-family: inherit;
 }
 .cc-icon-btn:hover {
-  color: var(--cc-fg); background: var(--cc-surface-2);
+  color: var(--cc-fg);
+  background: var(--cc-surface-2);
   border-color: var(--cc-border);
 }
-.cc-icon-btn.cc-icon-btn-sm { width: 26px; height: 26px; font-size: 14px; }
+.cc-icon-btn:active { transform: scale(0.94); }
+.cc-icon-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--cc-accent-soft-2);
+  border-color: var(--cc-accent);
+}
+.cc-icon-btn.cc-icon-btn-sm { width: 32px; height: 32px; font-size: 18px; }
+.cc-icon-btn.cc-icon-btn-xs { width: 28px; height: 28px; font-size: 15px; }
 .cc-icon-btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+.cc-icon-btn[disabled]:hover {
+  background: transparent; border-color: transparent; color: var(--cc-fg-muted);
+}
+/* Subtle accent treatment for primary header buttons (settings, etc.) */
+.cc-icon-btn.cc-icon-btn-accent { color: var(--cc-accent); }
+.cc-icon-btn.cc-icon-btn-accent:hover { color: var(--cc-accent); filter: brightness(1.1); }
 
 /* ── Inputs ───────────────────────────────────────────────────────────── */
 .cc-input,
@@ -418,7 +485,8 @@ body[data-cc-has-native-sidebar="1"] #comfyclaw-edge-handle { display: none !imp
 .cc-icon-comfyclaw::before {
   content: "🐾";
   font-style: normal;
-  font-size: 16px;
+  font-size: 20px;
+  line-height: 1;
 }
 
 #comfyclaw-panel[data-dock="sidebar"] {
@@ -456,7 +524,7 @@ body[data-cc-has-native-sidebar="1"] #comfyclaw-edge-handle { display: none !imp
 #comfyclaw-edge-handle {
   position: fixed; top: 50%; right: 0; transform: translateY(-50%);
   z-index: 9997;
-  width: 26px; height: 60px;
+  width: 30px; height: 64px;
   background: var(--cc-surface);
   border: 1px solid var(--cc-border);
   border-right: none;
@@ -466,7 +534,7 @@ body[data-cc-has-native-sidebar="1"] #comfyclaw-edge-handle { display: none !imp
   display: none;
   align-items: center; justify-content: center;
   cursor: pointer;
-  font-size: 16px;
+  font-size: 20px;
   transition: transform 0.15s, background 0.15s;
 }
 #comfyclaw-edge-handle:hover {
@@ -492,8 +560,8 @@ body[data-cc-has-native-sidebar="1"] #comfyclaw-edge-handle { display: none !imp
 #comfyclaw-action-bar .cc-action-primary { flex: 1; display: flex; }
 #comfyclaw-action-bar .cc-action-primary .cc-btn { flex: 1; }
 
-/* Theme + dock toggle buttons live inside the header row */
-.cc-header-toggle { font-size: 16px; }
+/* Theme + dock toggle buttons — inherit cc-icon-btn sizing */
+.cc-header-toggle { font-size: 20px; line-height: 1; }
 
 /* ── Cursor-style composer card ──────────────────────────────────────── */
 .cc-composer-card {
@@ -525,55 +593,71 @@ body[data-cc-has-native-sidebar="1"] #comfyclaw-edge-handle { display: none !imp
 }
 .cc-composer-card textarea:focus { box-shadow: none !important; }
 .cc-composer-toolbar {
-  display: flex; align-items: center; gap: 4px;
+  display: flex; align-items: center; gap: 6px;
   flex-wrap: wrap;
-  padding-top: 2px;
+  padding-top: 4px;
 }
 .cc-composer-chip {
-  display: inline-flex; align-items: center; gap: 5px;
-  padding: 3px 8px 3px 7px; border-radius: 7px;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border-radius: 8px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--cc-fg-muted);
-  font-size: 11px; font-weight: 600;
+  font-size: 12.5px; font-weight: 600;
   cursor: pointer;
   font-family: inherit;
   transition: background 0.15s, border-color 0.15s, color 0.15s;
   white-space: nowrap;
   max-width: 200px; overflow: hidden; text-overflow: ellipsis;
+  line-height: 1.2;
 }
 .cc-composer-chip:hover {
   background: var(--cc-surface);
   border-color: var(--cc-border);
   color: var(--cc-fg);
 }
+.cc-composer-chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--cc-accent-soft-2);
+  border-color: var(--cc-accent);
+}
 .cc-composer-chip .cc-chip-dot {
-  width: 6px; height: 6px; border-radius: 50%;
+  width: 8px; height: 8px; border-radius: 50%;
   background: var(--cc-accent);
   flex-shrink: 0;
 }
 .cc-composer-chip .cc-chip-chev {
-  font-size: 9px; opacity: 0.55; margin-left: 1px;
+  font-size: 11px; opacity: 0.55; margin-left: 1px;
 }
 .cc-composer-btn {
-  width: 32px; height: 32px; border-radius: 8px;
+  width: 36px; height: 36px; border-radius: var(--cc-radius-sm);
   border: 1px solid var(--cc-border);
   background: var(--cc-surface);
   color: var(--cc-fg-muted);
   cursor: pointer;
-  font-size: 15px; line-height: 1;
+  font-size: 18px; line-height: 1;
   display: inline-flex; align-items: center; justify-content: center;
   transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.05s;
   font-family: inherit;
   flex-shrink: 0;
+  user-select: none;
 }
 .cc-composer-btn:hover {
   background: var(--cc-surface-2);
   border-color: var(--cc-fg-dim);
   color: var(--cc-fg);
 }
-.cc-composer-btn:active { transform: scale(0.95); }
+.cc-composer-btn:active { transform: scale(0.94); }
+.cc-composer-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--cc-accent-soft-2);
+}
 .cc-composer-btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+.cc-composer-btn[disabled]:hover {
+  background: var(--cc-surface);
+  border-color: var(--cc-border);
+  color: var(--cc-fg-muted);
+}
 .cc-composer-btn-primary {
   background: var(--cc-accent);
   border-color: var(--cc-accent);
@@ -594,7 +678,7 @@ body[data-cc-has-native-sidebar="1"] #comfyclaw-edge-handle { display: none !imp
 }
 [data-cc-theme="light"] .cc-composer-btn-stop { color: #ffffff; }
 .cc-composer-btn-stop:hover { filter: brightness(1.08); }
-.cc-chip-icon { font-size: 13px; line-height: 1; }
+.cc-chip-icon { font-size: 15px; line-height: 1; }
 
 /* Slim progress bar at the top edge of the composer */
 .cc-composer-progress {
@@ -658,7 +742,7 @@ body[data-cc-has-native-sidebar="1"] #comfyclaw-edge-handle { display: none !imp
   color: var(--cc-accent);
 }
 .cc-popover-item .cc-popover-icon {
-  width: 14px; text-align: center; opacity: 0.7;
+  width: 18px; font-size: 14px; text-align: center; opacity: 0.8;
 }
 `;
 

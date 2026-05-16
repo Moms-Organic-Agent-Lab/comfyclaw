@@ -57,6 +57,7 @@ Recommended sections in the body:
 
 | Skill | Lines | What it does |
 |---|---:|---|
+| `comfyclaw-manual`      | 202 | Orient new users to ComfyClaw itself — panel, run modes, CLI, troubleshooting |
 | `controlnet-control`    |  82 | Add a ControlNet branch to enforce structural / spatial constraints |
 | `counting-prompts`      | 160 | Strategy for counts, multi-subject, and unusual-attribute prompts |
 | `creative`              |  47 | Sampler + prompt tags for vivid, concept-art-style output |

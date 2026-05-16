@@ -78,8 +78,8 @@ export function buildScoreboardCard(ev, onAccept) {
         ${_deltaBadge(ev.delta)}
       </div>
       <button class="cc-btn cc-btn-primary cc-accept-btn"
-              style="padding:5px 12px;font-size:11px;flex-shrink:0;">
-        ✓ Accept now
+              style="padding:7px 13px;font-size:12px;flex-shrink:0;">
+        <span style="font-size:14px;">✓</span> Accept now
       </button>
     </div>
     ${pct != null ? `

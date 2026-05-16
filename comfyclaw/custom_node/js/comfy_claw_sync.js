@@ -953,11 +953,11 @@ function _renderSessionTabs() {
       ? `${sess.name}\nLinked to: ${sess.workflowId}`
       : sess.name;
     tab.style.cssText = `
-      display:flex; align-items:center; gap:3px; padding:3px 9px;
-      border-radius:6px; cursor:pointer; font-size:11px; font-weight:600;
-      white-space:nowrap; max-width:120px; flex-shrink:0; transition:all 0.15s;
-      background:${isActive ? "#45475a" : "transparent"};
-      color:${isActive ? "#cdd6f4" : "#585b70"};
+      display:flex; align-items:center; gap:5px; padding:6px 11px;
+      border-radius:6px; cursor:pointer; font-size:12px; font-weight:600;
+      white-space:nowrap; max-width:140px; flex-shrink:0; transition:all 0.15s;
+      background:${isActive ? "var(--cc-surface-2)" : "transparent"};
+      color:${isActive ? "var(--cc-fg)" : "var(--cc-fg-dim)"};
       ${hasMismatch ? "border:1px dashed #f9e2af44;" : "border:1px solid transparent;"}
     `;
 
@@ -986,15 +986,27 @@ function _renderSessionTabs() {
       const warn = document.createElement("span");
       warn.textContent = "⚠";
       warn.title = `This session was created for: ${sess.workflowId}\nCurrent canvas: ${currentWfId}`;
-      warn.style.cssText = "font-size:9px;color:#f9e2af;flex-shrink:0;";
+      warn.style.cssText = "font-size:12px;color:#f9e2af;flex-shrink:0;line-height:1;";
       tab.appendChild(warn);
     }
 
     if (_sessions.length > 1) {
       const x = document.createElement("span");
       x.textContent = "×";
-      x.style.cssText = "font-size:14px;opacity:0.4;flex-shrink:0;line-height:1;margin-left:2px;";
+      x.style.cssText = `
+        font-size:17px; opacity:0.5; flex-shrink:0; line-height:1;
+        margin-left:3px; padding:1px 4px; border-radius:4px;
+        transition: background 0.15s, opacity 0.15s;
+      `;
       x.title = "Close session";
+      x.addEventListener("mouseenter", () => {
+        x.style.background = "var(--cc-surface)";
+        x.style.opacity = "1";
+      });
+      x.addEventListener("mouseleave", () => {
+        x.style.background = "transparent";
+        x.style.opacity = "0.5";
+      });
       x.addEventListener("click", e => { e.stopPropagation(); _deleteSession(sess.id); });
       tab.appendChild(x);
     }
@@ -1169,15 +1181,14 @@ function _updateWorkflowContextBar(currentWfId) {
          </span>`
       : "";
     bar.innerHTML = `
-      <span style="color:var(--cc-fg-dim); font-size:10px;flex-shrink:0;">🗂</span>
+      <span style="color:var(--cc-fg-dim); font-size:14px;flex-shrink:0;line-height:1;">🗂</span>
       <span style="flex:1;color:var(--cc-fg-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
             title="Canvas: ${escHtml(currentWfId)}">
         ${escHtml(displayId.length > 28 ? displayId.slice(0, 28) + "…" : displayId)}
       </span>
       ${siblingBadge}
-      <button id="cc-wf-relink-btn" title="Re-link to a different workflow name"
-              style="padding:2px 6px;border:none;background:transparent;
-                     color:var(--cc-fg-dim);cursor:pointer;font-size:10px;flex-shrink:0;">✎</button>
+      <button id="cc-wf-relink-btn" class="cc-icon-btn cc-icon-btn-xs"
+              title="Re-link to a different workflow name">✎</button>
     `;
     document.getElementById("cc-wf-relink-btn")?.addEventListener("click", () => {
       const name = prompt("Set workflow label for this session:", sessWf || currentWfId);
@@ -1397,9 +1408,9 @@ function createSettingsModal() {
       <span style="font-weight:800; font-size:14px; color:#cba6f7; letter-spacing:0.3px;">
         ⚙ Settings
       </span>
-      <button id="cc-stg-close"
-              style="background:none;border:none;color:#585b70;cursor:pointer;
-                     font-size:22px;line-height:1;padding:0 2px;transition:color 0.1s;">×</button>
+      <button id="cc-stg-close" class="cc-icon-btn"
+              title="Close settings"
+              style="margin-right:-6px;">×</button>
     </div>
 
     <!-- Tab bar -->
@@ -2274,7 +2285,8 @@ function _setActiveProvider(key, updateSession = true) {
 function renderMarkdown(raw) {
   if (!raw) return "";
 
-  // Extract fenced code blocks first so their content isn't processed
+  // Single placeholder pool: fenced code blocks AND GFM tables both land
+  // here as pre-rendered HTML so they survive the final `\n -> <br>`.
   const blocks = [];
   let text = raw.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
     const idx = blocks.length;
@@ -2294,6 +2306,11 @@ function renderMarkdown(raw) {
     );
     return `\x00BLK${idx}\x00`;
   });
+
+  // GFM tables — must run before the global escape below because the
+  // extractor needs to see raw `|`s; cell content is escaped + inline-
+  // transformed inside _renderMdTables.
+  text = _renderMdTables(text, blocks);
 
   // Escape remaining HTML
   text = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -2334,6 +2351,100 @@ function renderMarkdown(raw) {
   text = text.replace(/\x00BLK(\d+)\x00/g, (_, i) => blocks[parseInt(i)]);
 
   return text;
+}
+
+// Inline transforms applied per table cell (we can't let the global
+// pass touch the table HTML because it's behind a placeholder by then).
+function _renderMdInline(s) {
+  let t = s
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  t = t.replace(/`([^`\n]+)`/g,
+    `<code style="background:var(--cc-surface-2);border-radius:3px;padding:1px 5px;color:var(--cc-fg);`
+    + `font-size:11px;font-family:monospace;">$1</code>`);
+  t = t.replace(/\*\*\*(.*?)\*\*\*/g, "<strong><em>$1</em></strong>");
+  t = t.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+  t = t.replace(/__(.*?)__/g, "<strong>$1</strong>");
+  t = t.replace(/\*(.*?)\*/g, "<em>$1</em>");
+  return t;
+}
+
+// GFM table extractor — see lib/markdown.js for the same logic.
+// Requires ≥2 columns so it can't collide with the `^---+$` HR rule.
+function _renderMdTables(text, blocks) {
+  const lines = text.split("\n");
+  const sepRe =
+    /^[ \t]*\|?[ \t]*:?-{2,}:?(?:[ \t]*\|[ \t]*:?-{2,}:?)+[ \t]*\|?[ \t]*$/;
+
+  const splitCells = (line) => {
+    let s = line.trim();
+    if (s.startsWith("|")) s = s.slice(1);
+    if (s.endsWith("|"))   s = s.slice(0, -1);
+    return s.split("|").map((c) => c.trim());
+  };
+
+  const parseAligns = (sep) =>
+    sep.trim().replace(/^\|/, "").replace(/\|$/, "")
+      .split("|").map((c) => {
+        const t = c.trim();
+        const l = t.startsWith(":"), r = t.endsWith(":");
+        if (l && r) return "center";
+        if (r)      return "right";
+        if (l)      return "left";
+        return null;
+      });
+
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const header = lines[i];
+    const sep    = lines[i + 1];
+    if (header && /\|/.test(header) && sep && sepRe.test(sep)) {
+      const rows = [];
+      let j = i + 2;
+      while (j < lines.length && /\|/.test(lines[j]) && lines[j].trim() !== "") {
+        rows.push(lines[j]);
+        j++;
+      }
+      const aligns = parseAligns(sep);
+      const cellHtml = (txt, k, isTh) => {
+        const align = aligns[k];
+        const styles = [
+          "padding:5px 9px",
+          "border:1px solid var(--cc-border)",
+          "vertical-align:top",
+        ];
+        if (align) styles.push(`text-align:${align}`);
+        if (isTh)  styles.push("background:var(--cc-surface-2)",
+                               "font-weight:700",
+                               "color:var(--cc-fg)");
+        else       styles.push("color:var(--cc-fg)");
+        const tag = isTh ? "th" : "td";
+        return `<${tag} style="${styles.join(";")}">${_renderMdInline(txt)}</${tag}>`;
+      };
+      let html =
+        `<div class="cc-md-table-wrap" style="overflow-x:auto;margin:8px 0;">`
+        + `<table class="cc-md-table" style="border-collapse:collapse;`
+        + `font-size:11.5px;line-height:1.45;min-width:0;">`;
+      html += `<thead><tr>`;
+      splitCells(header).forEach((c, k) => { html += cellHtml(c, k, true); });
+      html += `</tr></thead><tbody>`;
+      rows.forEach((r) => {
+        html += `<tr>`;
+        splitCells(r).forEach((c, k) => { html += cellHtml(c, k, false); });
+        html += `</tr>`;
+      });
+      html += `</tbody></table></div>`;
+
+      const idx = blocks.length;
+      blocks.push(html);
+      out.push(`\x00BLK${idx}\x00`);
+      i = j;
+    } else {
+      out.push(lines[i]);
+      i++;
+    }
+  }
+  return out.join("\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2396,31 +2507,31 @@ function createComfyClawPanel() {
            and the dot's tooltip now carries the node count. -->
       <span id="cc-conn-dot"
             title="Connecting… (tab: ${_CONNECTION_ID})"
-            style="width:8px;height:8px;border-radius:50%;background:var(--cc-accent-yellow);
+            style="width:10px;height:10px;border-radius:50%;background:var(--cc-accent-yellow);
                    flex-shrink:0;cursor:pointer;
                    box-shadow:0 0 0 2px rgba(249,226,175,0.18);"></span>
       <span id="cc-node-count" style="display:none;"></span>
-      <div style="display:flex; gap:2px; align-items:center; flex:1; min-width:0;">
+      <div style="display:flex; gap:4px; align-items:center; flex:1; min-width:0;">
         <div id="comfyclaw-sessions-tabs"
-             style="display:flex; gap:2px; flex:1; overflow-x:auto; min-width:0;
+             style="display:flex; gap:3px; flex:1; overflow-x:auto; min-width:0;
                     scrollbar-width:none;"></div>
-        <button id="comfyclaw-new-session-btn" class="cc-icon-btn cc-icon-btn-sm"
+        <button id="comfyclaw-new-session-btn" class="cc-icon-btn"
                 title="New session"
-                style="font-size:14px;font-weight:600;">+</button>
+                style="font-size:26px;font-weight:500;">+</button>
       </div>
       <!-- Right cluster: theme + dock moved into Settings modal (Appearance
            tab). Only the always-relevant actions remain here. -->
-      <div style="display:flex; align-items:center; gap:1px; flex-shrink:0;">
-        <button id="comfyclaw-theme-btn" class="cc-icon-btn cc-icon-btn-sm cc-header-toggle"
+      <div style="display:flex; align-items:center; gap:4px; flex-shrink:0;">
+        <button id="comfyclaw-theme-btn" class="cc-icon-btn cc-header-toggle"
                 title="Toggle theme" style="display:none;">🌙</button>
-        <button id="comfyclaw-dock-btn" class="cc-icon-btn cc-icon-btn-sm cc-header-toggle"
+        <button id="comfyclaw-dock-btn" class="cc-icon-btn cc-header-toggle"
                 title="Cycle dock mode" style="display:none;">⌷</button>
-        <button id="comfyclaw-settings-btn" class="cc-icon-btn cc-icon-btn-sm"
+        <button id="comfyclaw-settings-btn" class="cc-icon-btn"
                 title="Open settings">⚙</button>
-        <button id="comfyclaw-ctrl-toggle" class="cc-icon-btn cc-icon-btn-sm"
+        <button id="comfyclaw-ctrl-toggle" class="cc-icon-btn"
                 title="Collapse / expand controls"
                 style="transition:transform 0.18s var(--cc-ease);">▾</button>
-        <button id="comfyclaw-close-btn" class="cc-icon-btn cc-icon-btn-sm"
+        <button id="comfyclaw-close-btn" class="cc-icon-btn"
                 title="Hide panel">×</button>
       </div>
     </div>
@@ -2587,14 +2698,12 @@ function createComfyClawPanel() {
                     scroll-behavior:smooth; min-height:0;
                     scrollbar-width:thin; scrollbar-color:var(--cc-border) transparent;"></div>
         <!-- Scroll-to-bottom button -->
-        <button id="cc-scroll-bottom" title="Scroll to bottom"
+        <button id="cc-scroll-bottom" class="cc-composer-btn"
+                title="Scroll to bottom"
                 style="position:absolute; bottom:10px; right:12px;
-                       width:32px; height:32px; border-radius:50%;
-                       background:var(--cc-surface-2); border:1px solid var(--cc-border);
-                       color:var(--cc-fg); cursor:pointer; font-size:16px;
-                       display:none; align-items:center; justify-content:center;
+                       border-radius:50%; display:none;
                        box-shadow:var(--cc-shadow-sm); z-index:2;
-                       transition:transform 0.15s, background 0.15s;">↓</button>
+                       background:var(--cc-surface-2);">↓</button>
       </div>
       <div id="comfyclaw-think-input-area"
            style="padding:8px 10px 10px; border-top:1px solid var(--cc-border); flex-shrink:0;
@@ -2627,8 +2736,7 @@ function createComfyClawPanel() {
               <span class="cc-chip-label">Scratch</span>
             </button>
             <button id="cc-composer-audit" class="cc-composer-btn"
-                    title="Audit current workflow"
-                    style="width:auto;padding:0 10px;font-size:14px;">🔍</button>
+                    title="Audit current workflow">🔍</button>
             <div style="flex:1;"></div>
             <button id="cc-composer-run" class="cc-composer-btn cc-composer-btn-run"
                     title="Run generation with this prompt">▶</button>
@@ -3903,10 +4011,7 @@ function createComfyClawPanel() {
     _authModal._showWaiting = () => {
       stepEl.innerHTML = `
         <div style="display:flex;align-items:center;gap:10px;">
-          <span class="cc-spinner" style="
-            width:18px;height:18px;border:2.5px solid var(--cc-border);
-            border-top-color:var(--cc-accent);border-radius:50%;
-            animation:cc-spin 0.8s linear infinite;"></span>
+          <span class="cc-spin-ring cc-spin-ring-lg"></span>
           <span>Asking Claude for a sign-in link…</span>
         </div>
       `;
@@ -4122,13 +4227,10 @@ function createComfyClawPanel() {
       if (!url) {
         stepEl.innerHTML = `
           <div style="display:flex;align-items:center;gap:10px;">
-            <span class="cc-spinner" style="
-              width:18px;height:18px;border:2.5px solid var(--cc-border);
-              border-top-color:var(--cc-accent);border-radius:50%;
-              animation:cc-spin 0.8s linear infinite;"></span>
+            <span class="cc-spin-ring cc-spin-ring-lg"></span>
             <span>${mode === "device_code"
-            ? "Waiting for Codex to print the device-code link…"
-            : "Asking Codex for a sign-in link…"}</span>
+              ? "Waiting for Codex to print the device-code link…"
+              : "Asking Codex for a sign-in link…"}</span>
           </div>
         `;
         return;
@@ -4928,13 +5030,14 @@ function appendAgentLog(event) {
     entry.id = `think-stream-${event.message_id}`;
     entry.classList.add("cc-log-entry");
     entry.innerHTML = `
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2px;">
-        <span>
-          ${style.icon}
-          <span style="color:${style.color}; font-weight:600; font-size:11px;">${style.label}</span>
-          <span class="cc-spin" style="font-size:14px;margin-left:6px;color:var(--cc-accent);">⟳</span>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px;">
+        <span style="display:inline-flex;align-items:center;gap:7px;">
+          <span style="font-size:16px;line-height:1;">${style.icon}</span>
+          <span style="color:${style.color}; font-weight:600; font-size:12.5px;">${style.label}</span>
+          <span class="cc-spin cc-spin-ring" title="Thinking…"
+                style="margin-left:4px;"></span>
         </span>
-        <span style="color:var(--cc-fg-dim); font-size:10px;">${time}</span>
+        <span style="color:var(--cc-fg-dim); font-size:11px;">${time}</span>
       </div>
       <div id="think-stream-body-${event.message_id}" style="white-space:pre-wrap;min-height:16px;">…</div>
     `;
@@ -4944,13 +5047,18 @@ function appendAgentLog(event) {
   }
 
   entry.innerHTML = `
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2px;">
-      <span>${style.icon} <span style="color:${style.color}; font-weight:600; font-size:11px;">${style.label}</span>${iterBadge}</span>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px;">
+      <span style="display:inline-flex;align-items:center;gap:7px;">
+        <span style="font-size:16px;line-height:1;">${style.icon}</span>
+        <span style="color:${style.color}; font-weight:600; font-size:12.5px;">${style.label}</span>
+        ${iterBadge}
+      </span>
       <div style="display:flex;align-items:center;gap:6px;">
         <button class="cc-msg-copy" title="Copy text"
-                style="background:none;border:none;color:var(--cc-fg-dim);cursor:pointer;font-size:14px;
-                       padding:2px 5px;border-radius:4px;line-height:1;">⎘</button>
-        <span style="color:var(--cc-fg-dim); font-size:10px;">${time}</span>
+                style="background:none;border:none;color:var(--cc-fg-dim);cursor:pointer;font-size:15px;
+                       padding:3px 7px;border-radius:5px;line-height:1;
+                       transition:background 0.15s,color 0.15s;">⎘</button>
+        <span style="color:var(--cc-fg-dim); font-size:11px;">${time}</span>
       </div>
     </div>
     <div class="cc-msg-body">${body}</div>
@@ -5384,9 +5492,8 @@ function createChatPanel() {
       <span style="font-size:14px; font-weight:700; color:#cdd6f4;">
         💬 ComfyClaw Chat
       </span>
-      <button id="comfyclaw-chat-close"
-              style="background:none; border:none; color:#a6adc8; cursor:pointer;
-                     font-size:18px; line-height:1;">×</button>
+      <button id="comfyclaw-chat-close" class="cc-icon-btn cc-icon-btn-sm"
+              title="Close chat">×</button>
     </div>
     <div id="comfyclaw-chat-messages"
          style="flex:1; overflow-y:auto; padding:12px; display:flex;
@@ -5403,10 +5510,9 @@ function createChatPanel() {
                   style="flex:1; padding:8px 10px; background:#313244; border:1px solid #45475a;
                          border-radius:8px; color:#cdd6f4; font-size:13px; resize:none;
                          font-family:inherit; outline:none;"></textarea>
-        <button id="comfyclaw-chat-send"
-                style="padding:8px 12px; border:none; border-radius:8px;
-                       background:#89b4fa; color:#1e1e2e; cursor:pointer;
-                       font-size:18px; align-self:flex-end;">➤</button>
+        <button id="comfyclaw-chat-send" class="cc-composer-btn cc-composer-btn-primary"
+                title="Send (Enter)"
+                style="align-self:flex-end;">↑</button>
       </div>
     </div>
   `;

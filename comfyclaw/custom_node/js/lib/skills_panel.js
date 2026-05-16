@@ -70,16 +70,16 @@ export function createSkillsTab({ getWs }) {
     <!-- Import + bulk action bar -->
     <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;">
       <button class="cc-btn cc-btn-secondary cc-skill-import-folder"
-              style="font-size:11px;padding:6px 10px;" title="Import from a local folder">
-        <span style="opacity:0.85;">📁</span> Folder
+              style="font-size:12px;padding:7px 11px;" title="Import from a local folder">
+        <span style="opacity:0.85;font-size:14px;">📁</span> Folder
       </button>
       <button class="cc-btn cc-btn-secondary cc-skill-import-zip"
-              style="font-size:11px;padding:6px 10px;" title="Upload a .zip">
-        <span style="opacity:0.85;">🗜</span> .zip
+              style="font-size:12px;padding:7px 11px;" title="Upload a .zip">
+        <span style="opacity:0.85;font-size:14px;">🗜</span> .zip
       </button>
       <button class="cc-btn cc-btn-secondary cc-skill-import-git"
-              style="font-size:11px;padding:6px 10px;" title="Clone from a git URL">
-        <span style="opacity:0.85;">🌐</span> Git
+              style="font-size:12px;padding:7px 11px;" title="Clone from a git URL">
+        <span style="opacity:0.85;font-size:14px;">🌐</span> Git
       </button>
       <span style="flex:1;"></span>
       <button class="cc-icon-btn cc-icon-btn-sm cc-skill-bulk-on"
@@ -187,7 +187,7 @@ export function createSkillsTab({ getWs }) {
           </div>
           <div class="cc-empty-actions">
             <button class="cc-btn cc-btn-secondary cc-empty-retry"
-                    style="font-size:11px;padding:6px 10px;">
+                    style="font-size:12px;padding:7px 11px;">
               ↻ Retry now
             </button>
           </div>
@@ -225,13 +225,13 @@ export function createSkillsTab({ getWs }) {
           (<code>comfyclaw/skills/</code>).
         </div>
         <div class="cc-empty-actions">
-          <button class="cc-btn cc-btn-secondary cc-empty-folder" style="font-size:11px;padding:6px 10px;">
+          <button class="cc-btn cc-btn-secondary cc-empty-folder" style="font-size:12px;padding:7px 11px;">
             📁 Import folder
           </button>
-          <button class="cc-btn cc-btn-secondary cc-empty-zip" style="font-size:11px;padding:6px 10px;">
+          <button class="cc-btn cc-btn-secondary cc-empty-zip" style="font-size:12px;padding:7px 11px;">
             🗜 Upload .zip
           </button>
-          <button class="cc-btn cc-btn-secondary cc-empty-git" style="font-size:11px;padding:6px 10px;">
+          <button class="cc-btn cc-btn-secondary cc-empty-git" style="font-size:12px;padding:7px 11px;">
             🌐 From git
           </button>
         </div>
@@ -295,7 +295,7 @@ export function createSkillsTab({ getWs }) {
                   title="Source: ${escHtml(meta.label)}"
                   style="color:${meta.color};border-color:${meta.color};
                          background:transparent;">
-              <span style="font-size:10px;line-height:1;opacity:0.95;">${meta.icon}</span>
+              <span style="font-size:12px;line-height:1;opacity:0.95;">${meta.icon}</span>
               <span>${escHtml(meta.label)}</span>
             </span>
           </div>

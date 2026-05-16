@@ -28,14 +28,14 @@ export function showToast(msg, type = "info", duration = 2800) {
   const el = document.createElement("div");
   el.style.cssText = `
     background:${c.bg}; border:1px solid ${c.border}; color:${c.text};
-    padding:8px 16px; border-radius:10px; font-size:12px; font-weight:600;
+    padding:9px 18px; border-radius:10px; font-size:13px; font-weight:600;
     pointer-events:none; font-family:system-ui,sans-serif;
     backdrop-filter:blur(8px); box-shadow:0 4px 20px rgba(0,0,0,0.4);
-    display:flex; align-items:center; gap:7px;
+    display:flex; align-items:center; gap:8px;
     opacity:0; transition:opacity 0.2s, transform 0.2s;
     transform:translateY(8px);
   `;
-  el.innerHTML = `<span style="font-size:14px;">${icons[type] || icons.info}</span><span>${escHtml(msg)}</span>`;
+  el.innerHTML = `<span style="font-size:16px;line-height:1;">${icons[type] || icons.info}</span><span>${escHtml(msg)}</span>`;
   container.appendChild(el);
   requestAnimationFrame(() => {
     el.style.opacity = "1";
