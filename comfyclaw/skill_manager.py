@@ -513,6 +513,32 @@ class SkillsRegistry:
         self._save_state()
         self.reload()
 
+    def update_body(self, name: str, body: str) -> None:
+        """Replace a skill's Markdown body while preserving frontmatter.
+
+        Built-in skills are immutable and cannot be updated.
+        """
+        if name not in self._cache:
+            raise KeyError(name)
+        props, _old_body, source = self._cache[name]
+        if source == "builtin":
+            raise PermissionError(f"cannot edit built-in skill {name!r}")
+
+        path = props.location
+        if not path.exists():
+            raise FileNotFoundError(f"skill file not found: {path}")
+
+        content = path.read_text(encoding="utf-8")
+        if not content.startswith("---"):
+            raise ValueError(f"{path}: SKILL.md missing YAML frontmatter")
+        parts = content.split("---", 2)
+        if len(parts) < 3:
+            raise ValueError(f"{path}: frontmatter not closed with ---")
+
+        new_content = f"---{parts[1]}---\n{(body or '').rstrip()}\n"
+        path.write_text(new_content, encoding="utf-8")
+        self.reload()
+
     # ------------------------------------------------------------------
     # Diagnostics
     # ------------------------------------------------------------------

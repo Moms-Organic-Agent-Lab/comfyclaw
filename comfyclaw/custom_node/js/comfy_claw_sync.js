@@ -1447,6 +1447,12 @@ function createSettingsModal() {
                      border-bottom:2px solid transparent; transition:all 0.15s;">
         🔑 Providers
       </button>
+      <button class="cc-stab" data-tab="api-keys"
+              style="padding:10px 16px; border:none; background:transparent;
+                     cursor:pointer; font-size:12px; font-weight:600;
+                     border-bottom:2px solid transparent; transition:all 0.15s;">
+        🗝 API Keys
+      </button>
       <button class="cc-stab" data-tab="connection"
               style="padding:10px 16px; border:none; background:transparent;
                      cursor:pointer; font-size:12px; font-weight:600;
@@ -1502,6 +1508,7 @@ function createSettingsModal() {
     if (tab === "agents") _renderAgentsTab(content);
     else if (tab === "setup") _renderSetupTab(content);
     else if (tab === "providers") _renderProvidersTab(content);
+    else if (tab === "api-keys") _renderProvidersTab(content);
     else if (tab === "connection") _renderConnectionTab(content);
     else if (tab === "appearance") _renderAppearanceTab(content);
     else _renderDefaultsTab(content);
@@ -2438,7 +2445,7 @@ function _setActiveProvider(key, updateSession = true) {
       4500,
     );
     if (!_settingsModal) _settingsModal = createSettingsModal();
-    _settingsModal.openTo("providers", anchor);
+    _settingsModal.openTo("api-keys", anchor);
     return;
   }
 
@@ -2914,6 +2921,12 @@ function createComfyClawPanel() {
             <span id="cc-composer-timer" class="cc-pill cc-pill-mono" style="display:none;">0:00</span>
           </div>
           <div class="cc-composer-toolbar">
+            <button id="cc-composer-access-chip" class="cc-composer-chip"
+                    title="Choose access mode: CLI (subscription login) or API (provider key)">
+              <span class="cc-chip-icon">🔀</span>
+              <span class="cc-chip-label">CLI</span>
+              <span class="cc-chip-chev">▾</span>
+            </button>
             <button id="cc-composer-backend-chip" class="cc-composer-chip"
                     title="Click to change agent backend">
               <span class="cc-chip-icon">⚙</span>
@@ -3390,6 +3403,7 @@ function createComfyClawPanel() {
     const _pp = _activeProvPayload();
     const runMode = _modeToggleRef?.value() || "auto";
     const agentBackend = _backendPickerRef?.value() || "litellm";
+    const _agentIsCli = _isCliBackend(agentBackend);
     const dryRun = !!panel.querySelector("#comfyclaw-gen-dryrun")?.checked;
     // The agent path (trigger_generation) also needs the per-CLI model
     // choice so the agent loop talks to the same model the chat does.
@@ -3410,8 +3424,10 @@ function createComfyClawPanel() {
         model: _agentModel,
         verifier_model: panel.querySelector("#comfyclaw-gen-vmodel").value,
         agent_backend: agentBackend,
-        api_key: _pp.api_key || panel.querySelector("#comfyclaw-gen-apikey").value.trim() || undefined,
-        api_base: _pp.api_base || undefined,
+        api_key: _agentIsCli
+          ? undefined
+          : (_pp.api_key || panel.querySelector("#comfyclaw-gen-apikey").value.trim() || undefined),
+        api_base: _agentIsCli ? undefined : (_pp.api_base || undefined),
         dry_run: dryRun,
         // Always pin modality explicitly so a `comfyclaw serve-video` server
         // default doesn't bleed into image triggers and vice versa.
@@ -3443,11 +3459,15 @@ function createComfyClawPanel() {
     if (_activeSyncClient?.ws?.readyState !== WebSocket.OPEN) return;
     const workflow = await exportCurrentWorkflow();
     const _dpp = _activeProvPayload();
+    const _dbe = _backendPickerRef?.value() || "litellm";
+    const _dIsCli = _isCliBackend(_dbe);
     _activeSyncClient.ws.send(JSON.stringify({
       type: "debug_workflow", workflow,
       model: panel.querySelector("#comfyclaw-gen-model").value.trim() || undefined,
-      api_key: _dpp.api_key || panel.querySelector("#comfyclaw-gen-apikey").value.trim() || undefined,
-      api_base: _dpp.api_base || undefined,
+      api_key: _dIsCli
+        ? undefined
+        : (_dpp.api_key || panel.querySelector("#comfyclaw-gen-apikey").value.trim() || undefined),
+      api_base: _dIsCli ? undefined : (_dpp.api_base || undefined),
     }));
     setGenStatus("verifying", "Running debug agent…");
     panel.querySelector("#comfyclaw-gen-status").style.display = "block";
@@ -3466,6 +3486,104 @@ function createComfyClawPanel() {
   // ── Chat input (dual-mode: chat when idle, refinement when generating) ────────
   const chatInput = panel.querySelector("#comfyclaw-think-input");
   const chatSend = panel.querySelector("#comfyclaw-think-send");
+
+  // ── Image attachments (drag & drop / paste) ───────────────────────────────
+  let _chatImageAttachments = []; // [{ name, mime, base64 }]
+
+  function _renderAttachmentBar() {
+    let bar = panel.querySelector("#cc-chat-attach-bar");
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.id = "cc-chat-attach-bar";
+      bar.style.cssText = "display:none; padding:4px 10px 0; gap:6px; flex-wrap:wrap;";
+      const host = panel.querySelector("#comfyclaw-think-input-area");
+      host?.insertBefore(bar, host.firstChild);
+    }
+    if (!_chatImageAttachments.length) {
+      bar.style.display = "none";
+      bar.innerHTML = "";
+      return;
+    }
+    bar.style.display = "flex";
+    bar.innerHTML = _chatImageAttachments.map((a, i) => `
+      <span style="display:inline-flex;align-items:center;gap:6px;
+                   border:1px solid var(--cc-border);background:var(--cc-surface-2);
+                   border-radius:999px;padding:3px 8px;font-size:11px;color:var(--cc-fg-muted);">
+        🖼 ${escHtml(a.name || `image-${i + 1}`)}
+        <button data-rm="${i}" class="cc-icon-btn cc-icon-btn-sm" style="padding:0 4px;">✕</button>
+      </span>
+    `).join("");
+    bar.querySelectorAll("button[data-rm]").forEach((b) => {
+      b.addEventListener("click", () => {
+        const idx = parseInt(b.dataset.rm || "-1", 10);
+        if (idx >= 0) {
+          _chatImageAttachments.splice(idx, 1);
+          _renderAttachmentBar();
+        }
+      });
+    });
+  }
+
+  async function _fileToAttachment(file) {
+    const mime = (file.type || "").toLowerCase();
+    if (!mime.startsWith("image/")) return null;
+    const dataUrl = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result || ""));
+      r.onerror = () => reject(new Error("File read failed"));
+      r.readAsDataURL(file);
+    });
+    const i = dataUrl.indexOf(",");
+    if (i < 0) return null;
+    return {
+      name: file.name || "image",
+      mime: mime || "image/png",
+      base64: dataUrl.slice(i + 1),
+    };
+  }
+
+  async function _appendImageFiles(files) {
+    if (!files?.length) return;
+    const picked = [];
+    for (const f of files) {
+      try {
+        const a = await _fileToAttachment(f);
+        if (a) picked.push(a);
+      } catch (_) {
+        // ignore unreadable file
+      }
+    }
+    if (!picked.length) {
+      showToast("Only image files are supported.", "warning", 1800);
+      return;
+    }
+    _chatImageAttachments.push(...picked);
+    // Guardrail to keep WS payload reasonable.
+    if (_chatImageAttachments.length > 4) {
+      _chatImageAttachments = _chatImageAttachments.slice(-4);
+      showToast("Kept latest 4 images.", "info", 1600);
+    }
+    _renderAttachmentBar();
+  }
+
+  chatInput.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    chatInput.style.borderColor = "var(--cc-accent)";
+  });
+  chatInput.addEventListener("dragleave", () => {
+    chatInput.style.borderColor = "";
+  });
+  chatInput.addEventListener("drop", async (e) => {
+    e.preventDefault();
+    chatInput.style.borderColor = "";
+    const files = Array.from(e.dataTransfer?.files || []);
+    await _appendImageFiles(files);
+  });
+  chatInput.addEventListener("paste", async (e) => {
+    const files = Array.from(e.clipboardData?.files || []);
+    if (!files.length) return;
+    await _appendImageFiles(files);
+  });
 
   function sendFromPanel() {
     const text = chatInput.value.trim();
@@ -3495,11 +3613,16 @@ function createComfyClawPanel() {
         type: "chat_message",
         message_id: msgId,
         messages: _chatHistory,
+        images: _chatImageAttachments,
         model: _model,
-        api_key: _cpp.api_key || panel.querySelector("#comfyclaw-gen-apikey").value.trim() || undefined,
-        api_base: _cpp.api_base || undefined,
+        api_key: _isCliBackend(_be)
+          ? undefined
+          : (_cpp.api_key || panel.querySelector("#comfyclaw-gen-apikey").value.trim() || undefined),
+        api_base: _isCliBackend(_be) ? undefined : (_cpp.api_base || undefined),
         agent_backend: _be,
       }));
+      _chatImageAttachments = [];
+      _renderAttachmentBar();
     }
   }
 
@@ -3673,7 +3796,7 @@ function createComfyClawPanel() {
         const action = item.dataset.action;
         if (action === "open-providers") {
           if (!_settingsModal) _settingsModal = createSettingsModal();
-          _settingsModal.openTo("providers");
+          _settingsModal.openTo("api-keys");
           _modelPopover.dataset.open = "0";
           return;
         }
@@ -3691,7 +3814,7 @@ function createComfyClawPanel() {
             ? "cc-custom-models-section"
             : `cc-prov-card-${provKey}`;
           if (!_settingsModal) _settingsModal = createSettingsModal();
-          _settingsModal.openTo("providers", anchor);
+          _settingsModal.openTo("api-keys", anchor);
           showToast(
             `${PROVIDERS[provKey]?.label || provKey} needs an API key first.`,
             "warning",
@@ -3730,6 +3853,8 @@ function createComfyClawPanel() {
     b.addEventListener("click", () => setTimeout(_refreshModelChip, 0)));
 
   // ── Composer backend chip + popover (LiteLLM / Claude Code / Codex / …) ───
+  const accessChip = panel.querySelector("#cc-composer-access-chip");
+  const accessChipLabel = accessChip?.querySelector(".cc-chip-label");
   const beChip = panel.querySelector("#cc-composer-backend-chip");
   const beChipLabel = beChip?.querySelector(".cc-chip-label");
   const beChipIcon = beChip?.querySelector(".cc-chip-icon");
@@ -3745,6 +3870,10 @@ function createComfyClawPanel() {
     "gemini-cli": { label: "Gemini CLI", letter: "G", brand: "#4285f4", needsApiKey: false },
   };
 
+  const _CLI_BACKENDS = ["claude-code", "codex", "gemini-cli"];
+  const _ACCESS_MODE_KEY = "comfyclaw_access_mode"; // "cli" | "api"
+  const _LAST_CLI_BACKEND_KEY = "comfyclaw_last_cli_backend";
+
   /** Render the brand-coloured logo chip for a backend. */
   function _backendLogoHtml(meta, size = 16) {
     if (!meta) return "";
@@ -3758,6 +3887,37 @@ function createComfyClawPanel() {
   }
   function _activeBackendId() {
     return _backendPickerRef?.value() || localStorage.getItem("comfyclaw_agent_backend") || "litellm";
+  }
+
+  function _setAccessChip(mode) {
+    if (!accessChipLabel) return;
+    const m = mode === "api" ? "API" : "CLI";
+    accessChipLabel.textContent = m;
+    accessChip.title = m === "API"
+      ? "API mode: uses provider keys (LiteLLM)"
+      : "CLI mode: uses local CLI login (no provider API key)";
+  }
+
+  function _effectiveAccessMode() {
+    return _activeBackendId() === "litellm" ? "api" : "cli";
+  }
+
+  function _setBackendByAccessMode(mode) {
+    const target = mode === "api"
+      ? "litellm"
+      : (localStorage.getItem(_LAST_CLI_BACKEND_KEY) || "claude-code");
+    const st = _backendPickerRef?.status?.(target) || null;
+    if (mode === "cli" && st && st.state && st.state !== "ok") {
+      if (!_settingsModal) _settingsModal = createSettingsModal();
+      _settingsModal.openTo("agents");
+      showToast("CLI backend is not ready. Sign in first in Agents.", "warning", 2600);
+      return;
+    }
+    if (_backendPickerRef?.set) _backendPickerRef.set(target);
+    else localStorage.setItem("comfyclaw_agent_backend", target);
+    if (target !== "litellm") localStorage.setItem(_LAST_CLI_BACKEND_KEY, target);
+    localStorage.setItem(_ACCESS_MODE_KEY, mode === "api" ? "api" : "cli");
+    _refreshBackendChip();
   }
   function _refreshBackendChip() {
     if (!beChip) return;
@@ -3779,6 +3939,9 @@ function createComfyClawPanel() {
     if (modelChipEl) modelChipEl.style.display = "";
     // Refresh the chip text + dot colour for the new backend.
     _refreshModelChip?.();
+    const mode = _effectiveAccessMode();
+    _setAccessChip(mode);
+    if (id !== "litellm") localStorage.setItem(_LAST_CLI_BACKEND_KEY, id);
   }
 
   let _bePopover = null;
@@ -4683,6 +4846,12 @@ function createComfyClawPanel() {
     if (_bePopover?.dataset?.open === "1") _bePopover.dataset.open = "0";
     else _openBackendPopover();
   });
+
+  accessChip?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const cur = _effectiveAccessMode();
+    _setBackendByAccessMode(cur === "api" ? "cli" : "api");
+  });
   // Custom event so the legacy picker (or any other code path) can poke us.
   beChip?.addEventListener("cc-backend-refresh", () => {
     _refreshBackendChip();
@@ -4693,6 +4862,15 @@ function createComfyClawPanel() {
   // backend availability via WS, which can demote the saved backend to litellm).
   setTimeout(_refreshBackendChip, 0);
   setTimeout(_refreshBackendChip, 1000);
+  // Apply a persisted preference once the picker has initial availability.
+  setTimeout(() => {
+    const preferred = localStorage.getItem(_ACCESS_MODE_KEY);
+    if (preferred === "api" || preferred === "cli") {
+      _setBackendByAccessMode(preferred);
+    } else {
+      _setAccessChip(_effectiveAccessMode());
+    }
+  }, 1200);
 
   // ── Expose agent state to the (module-scope) Settings modal ───────────────
   // The Settings "Agents" tab lives in createSettingsModal() (module scope)
@@ -4856,7 +5034,25 @@ function _augmentPanelWithTabs(panel) {
   if (!headerEl || !generateBody || !logBody) return;
 
   // 1) Build the skills + history tabs (lazy).
-  const skillsTab = createSkillsTab({ getWs: () => _activeSyncClient?.ws });
+  const skillsTab = createSkillsTab({
+    getWs: () => _activeSyncClient?.ws,
+    getRuntimeContext: () => {
+      const backend = _backendPickerRef?.value()
+        || localStorage.getItem("comfyclaw_agent_backend")
+        || "litellm";
+      const cli = _isCliBackend(backend);
+      const prov = _activeProvPayload();
+      const model = cli
+        ? _cliModelFor(backend)
+        : (panel.querySelector("#comfyclaw-gen-model")?.value || "");
+      return {
+        agent_backend: backend,
+        model,
+        api_key: cli ? undefined : (prov.api_key || panel.querySelector("#comfyclaw-gen-apikey")?.value?.trim() || undefined),
+        api_base: cli ? undefined : (prov.api_base || undefined),
+      };
+    },
+  });
   const historyTab = createHistoryTab({
     onReusePrompt: (text) => {
       if (!text) return;
@@ -5800,6 +5996,7 @@ function createChatPanel() {
     const _fbe = _backendPickerRef?.value()
       || localStorage.getItem("comfyclaw_agent_backend")
       || "litellm";
+    const _fIsCli = _isCliBackend(_fbe);
     // For CLI backends, attach the per-backend model selection so the
     // floating chat panel honours the user's choice the same way the
     // main panel does.
@@ -5808,11 +6005,14 @@ function createChatPanel() {
       type: "chat_message",
       message_id: msgId,
       messages: _chatHistory,
+      images: _chatImageAttachments,
       model: _fmodel,
-      api_key: _fpp.api_key || undefined,
-      api_base: _fpp.api_base || undefined,
+      api_key: _fIsCli ? undefined : (_fpp.api_key || undefined),
+      api_base: _fIsCli ? undefined : (_fpp.api_base || undefined),
       agent_backend: _fbe,
     }));
+    _chatImageAttachments = [];
+    _renderAttachmentBar();
   };
 
   panel.querySelector("#comfyclaw-chat-send").addEventListener("click", sendMsg);

@@ -635,6 +635,15 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 run_cfg["verifier_model"] = trigger_verifier_model
             if trigger_backend:
                 run_cfg["agent_backend"] = trigger_backend
+
+            # Never route provider API credentials into CLI backends
+            # (claude-code / codex / gemini-cli). Those backends must use
+            # their own local auth sessions to avoid stale-key confusion.
+            backend_eff = str(run_cfg.get("agent_backend") or "").strip().lower().replace("_", "-")
+            if backend_eff in {"claude-code", "codex", "gemini-cli"}:
+                run_cfg["api_key"] = ""
+                run_cfg["api_base"] = ""
+
             run_cfg["run_mode"] = run_mode
 
             # Modality may be selected per-trigger from the panel's video tab.

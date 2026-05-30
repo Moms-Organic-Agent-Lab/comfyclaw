@@ -52,6 +52,7 @@ import threading
 import time
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import parse_qs, unquote, urlparse
 
 from .agent_backends.base import (
     _env_with_claude_path,
@@ -446,32 +447,50 @@ class ClaudeAuthFlow(_BaseFlow):
     def submit_redirect_url(self, url: str) -> tuple[bool, str]:
         """Forward the user's pasted redirect URL into the CLI's stdin.
 
-        Validates that the input looks like a URL containing a ``code``
-        query parameter. Returns ``(ok, message)`` for the caller to
-        relay back to the panel.
+        Accepts either:
+
+        1. A full callback URL (``.../oauth/code/callback?code=...&state=...``), or
+        2. A raw authentication code string from Claude's "Authentication Code" page.
+
+        Returns ``(ok, message)`` for the caller to relay back to the panel.
         """
-        url = (url or "").strip()
-        if not url:
-            return False, "Paste the URL you were redirected to."
-        if not url.lower().startswith(("http://", "https://")):
-            return False, "URL must start with http:// or https://"
-        if "code=" not in url:
-            return (
-                False,
-                "That URL doesn't contain a `code` parameter. Did you copy the full address?",
-            )
+        raw = (url or "").strip()
+        if not raw:
+            return False, "Paste the redirect URL or authentication code."
+
+        payload = raw
+        if raw.lower().startswith(("http://", "https://")):
+            parsed = urlparse(raw)
+            q = parse_qs(parsed.query or "")
+            code = (q.get("code") or [""])[0].strip()
+            state = (q.get("state") or [""])[0].strip()
+            if not code:
+                return (
+                    False,
+                    "That URL doesn't contain a `code` parameter. Did you copy the full address?",
+                )
+            # Newer Claude auth screens provide a code value to paste back
+            # (`code#state`) rather than the full callback URL.
+            payload = unquote(code)
+            if state:
+                payload += f"#{unquote(state)}"
+        else:
+            payload = unquote(raw).strip()
+
+        if not payload:
+            return False, "Invalid code. Please make sure the full code was copied."
 
         proc = self._proc
         if proc is None or proc.poll() is not None or proc.stdin is None:
             return False, "Auth process is no longer running. Try Sign in again."
 
         try:
-            proc.stdin.write(url + "\n")
+            proc.stdin.write(payload + "\n")
             proc.stdin.flush()
         except Exception as exc:  # noqa: BLE001
             return False, f"Could not deliver code to claude: {exc}"
 
-        self._on_progress("info", "Submitted redirect URL to Claude CLI…")
+        self._on_progress("info", "Submitted authentication payload to Claude CLI…")
         return True, "submitted"
 
     def _finish(self, rc: int) -> None:

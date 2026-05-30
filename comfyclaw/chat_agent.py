@@ -110,6 +110,7 @@ async def chat_stream(
     api_key: str | None = None,
     api_base: str | None = None,
     agent_backend: str = "litellm",
+    images: list[dict] | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream chat tokens from the selected backend.
 
@@ -129,14 +130,26 @@ async def chat_stream(
     """
     backend = (agent_backend or "litellm").strip().lower().replace("_", "-")
     if backend in ("claude-code", "claude"):
+        if images:
+            yield "⚠️  Image attachments are currently supported in API mode (LiteLLM) only. "
+            yield "Switch Access to API to run vision chat."
+            return
         async for tok in _claude_chat_stream(messages, workflow, model):
             yield tok
         return
     if backend in ("codex", "openai-codex"):
+        if images:
+            yield "⚠️  Image attachments are currently supported in API mode (LiteLLM) only. "
+            yield "Switch Access to API to run vision chat."
+            return
         async for tok in _codex_chat_stream(messages, workflow, model):
             yield tok
         return
     if backend in ("gemini-cli", "gemini"):
+        if images:
+            yield "⚠️  Image attachments are currently supported in API mode (LiteLLM) only. "
+            yield "Switch Access to API to run vision chat."
+            return
         async for tok in _gemini_chat_stream(messages, workflow, model):
             yield tok
         return
@@ -145,7 +158,7 @@ async def chat_stream(
             "[chat] Unknown agent_backend %r — falling back to LiteLLM.",
             agent_backend,
         )
-    async for tok in _litellm_chat_stream(messages, workflow, model, api_key, api_base):
+    async for tok in _litellm_chat_stream(messages, workflow, model, api_key, api_base, images):
         yield tok
 
 
@@ -160,11 +173,33 @@ async def _litellm_chat_stream(
     model: str,
     api_key: str | None,
     api_base: str | None,
+    images: list[dict] | None,
 ) -> AsyncGenerator[str, None]:
     import litellm  # lazy import — not always needed
 
     system = _SYSTEM_BASE + _summarize_workflow(workflow)
     full_messages = [{"role": "system", "content": system}] + list(messages)
+
+    # If images are attached, lift the last user turn into multimodal content.
+    if images and full_messages:
+        for i in range(len(full_messages) - 1, -1, -1):
+            if full_messages[i].get("role") == "user":
+                txt = str(full_messages[i].get("content") or "")
+                blocks: list[dict] = [{"type": "text", "text": txt}]
+                for img in images[:4]:
+                    b64 = str(img.get("base64") or "").strip()
+                    mime = str(img.get("mime") or "image/png").strip() or "image/png"
+                    if not b64:
+                        continue
+                    blocks.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime};base64,{b64}"},
+                        }
+                    )
+                if len(blocks) > 1:
+                    full_messages[i] = {"role": "user", "content": blocks}
+                break
 
     kwargs: dict = {"model": model, "messages": full_messages, "stream": True}
     if api_key:

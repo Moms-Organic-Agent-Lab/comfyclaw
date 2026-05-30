@@ -585,6 +585,99 @@ class SyncServer:
     async def _send_skill_error(self, ws: Any, message: str) -> None:
         await ws.send(json.dumps({"type": "skill_error", "error": message}))
 
+    async def _refine_skill_preview(self, ws: Any, msg: dict) -> None:
+        """Generate a refined SKILL.md body with the selected model/backend."""
+        name = str(msg.get("name") or "").strip()
+        if not name:
+            await self._send_skill_error(ws, "Missing skill name.")
+            return
+
+        try:
+            reg = self.skills_registry()
+            props = reg.get_properties(name)
+            body = reg.get_body(name)
+        except KeyError:
+            await self._send_skill_error(ws, "Skill not found.")
+            return
+
+        model = str(msg.get("model") or "").strip() or self._model
+        api_key = (msg.get("api_key") or "").strip() or self._api_key
+        api_base = (msg.get("api_base") or "").strip() or None
+        backend = (
+            (msg.get("agent_backend") or "").strip().lower()
+            or os.environ.get("COMFYCLAW_AGENT_BACKEND", "").strip().lower()
+            or "litellm"
+        )
+        if backend in {"claude-code", "codex", "gemini-cli"}:
+            api_key = None
+            api_base = None
+
+        from .chat_agent import chat_stream
+
+        prompt = (
+            "Refine this ComfyClaw skill for clarity and practical usefulness. "
+            "Keep the same intent and tone, improve structure and actionable details. "
+            "Return ONLY the improved Markdown body (no YAML frontmatter, no code fences).\n\n"
+            f"Skill name: {name}\n"
+            f"Description: {props.description}\n\n"
+            "Current body:\n"
+            f"{body}\n"
+        )
+
+        chunks: list[str] = []
+        try:
+            async for tok in chat_stream(
+                [{"role": "user", "content": prompt}],
+                workflow=None,
+                model=model,
+                api_key=api_key,
+                api_base=api_base,
+                agent_backend=backend,
+            ):
+                chunks.append(tok)
+            refined = "".join(chunks).strip()
+            if not refined:
+                await self._send_skill_error(ws, "Model returned empty refinement.")
+                return
+
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "skill_refine_preview",
+                        "name": name,
+                        "original_body": body,
+                        "refined_body": refined,
+                    }
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            await self._send_skill_error(ws, f"Refinement failed: {exc}")
+
+    async def _apply_skill_refine(self, ws: Any, msg: dict) -> None:
+        name = str(msg.get("name") or "").strip()
+        refined_body = str(msg.get("refined_body") or "")
+        if not name:
+            await self._send_skill_error(ws, "Missing skill name.")
+            return
+        if not refined_body.strip():
+            await self._send_skill_error(ws, "Refined body is empty.")
+            return
+
+        try:
+            self.skills_registry().update_body(name, refined_body)
+            await self._send_skills_manifest(ws)
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "skill_refine_result",
+                        "ok": True,
+                        "name": name,
+                    }
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            await self._send_skill_error(ws, f"Could not apply refinement: {exc}")
+
     async def _import_skill_folder(self, ws: Any, msg: dict) -> None:
         path = msg.get("path", "")
         try:
@@ -1164,6 +1257,7 @@ class SyncServer:
 
         message_id: str = msg.get("message_id", "")
         messages: list = msg.get("messages", [])
+        images: list = msg.get("images", [])
         model: str = (msg.get("model") or "").strip() or self._model
         api_key: str | None = (msg.get("api_key") or "").strip() or self._api_key
         api_base: str | None = (msg.get("api_base") or "").strip() or None
@@ -1173,6 +1267,12 @@ class SyncServer:
             or "litellm"
         )
 
+        # CLI backends must use their own local auth and ignore provider
+        # API-key/base overrides sent by the panel.
+        if agent_backend in {"claude-code", "codex", "gemini-cli"}:
+            api_key = None
+            api_base = None
+
         try:
             async for token in chat_stream(
                 messages,
@@ -1181,6 +1281,7 @@ class SyncServer:
                 api_key,
                 api_base,
                 agent_backend=agent_backend,
+                images=images,
             ):
                 await websocket.send(
                     json.dumps(
@@ -1225,6 +1326,10 @@ class SyncServer:
         model: str = (msg.get("model") or "").strip() or self._model
         api_key: str | None = (msg.get("api_key") or "").strip() or self._api_key
         api_base: str | None = (msg.get("api_base") or "").strip() or None
+        backend = ((msg.get("agent_backend") or "").strip().lower() or "litellm")
+        if backend in {"claude-code", "codex", "gemini-cli"}:
+            api_key = None
+            api_base = None
 
         if not workflow and conn and conn.workflow:
             workflow = copy.deepcopy(conn.workflow)
@@ -1544,6 +1649,12 @@ class SyncServer:
         elif t == "reload_skills":
             self.reload_skills()
             await self._send_skills_manifest(ws)
+
+        elif t == "refine_skill_preview":
+            asyncio.ensure_future(self._refine_skill_preview(ws, msg))
+
+        elif t == "apply_skill_refine":
+            asyncio.ensure_future(self._apply_skill_refine(ws, msg))
 
         # ── Agent backend availability probe ─────────────────────────────────
         elif t == "list_agent_backends":

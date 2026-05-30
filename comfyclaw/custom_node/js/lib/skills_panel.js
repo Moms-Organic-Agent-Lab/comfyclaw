@@ -35,9 +35,9 @@ function _send(ws, msg) {
 
 /**
  * Build the Skills tab.
- * @param {{ getWs: () => WebSocket | null }} ctx
+ * @param {{ getWs: () => WebSocket | null, getRuntimeContext?: () => any }} ctx
  */
-export function createSkillsTab({ getWs }) {
+export function createSkillsTab({ getWs, getRuntimeContext }) {
   const root = document.createElement("div");
   root.style.cssText = `
     padding: 10px 12px; flex: 1; min-height: 0;
@@ -45,11 +45,16 @@ export function createSkillsTab({ getWs }) {
     overflow: hidden;
   `;
 
-  root.innerHTML = `
+ root.innerHTML = `
     <!-- Search + actions row -->
     <div style="display:flex; gap:6px; align-items:center;">
       <input class="cc-input cc-skill-search" type="search"
              placeholder="Search skills…" style="flex:1;font-size:12px;padding:6px 10px;">
+      <button class="cc-btn cc-btn-primary cc-skill-add"
+              title="Add a skill from folder, zip, or git"
+              style="font-size:12px;padding:6px 10px;white-space:nowrap;">
+        + Add Skill
+      </button>
       <button class="cc-icon-btn cc-skill-refresh" title="Reload from disk">↻</button>
     </div>
 
@@ -105,6 +110,7 @@ export function createSkillsTab({ getWs }) {
 
   const $search    = root.querySelector(".cc-skill-search");
   const $refresh   = root.querySelector(".cc-skill-refresh");
+  const $addSkill  = root.querySelector(".cc-skill-add");
   const $listEl    = root.querySelector(".cc-skill-list");
   const $status    = root.querySelector(".cc-skill-status");
   const $btnFolder = root.querySelector(".cc-skill-import-folder");
@@ -307,6 +313,7 @@ export function createSkillsTab({ getWs }) {
           </div>
         </div>
         <button class="cc-icon-btn cc-icon-btn-sm cc-sk-view" title="View body">📖</button>
+        <button class="cc-icon-btn cc-icon-btn-sm cc-sk-refine" title="Refine with model">✨</button>
         ${sk.builtin ? "" : `
           <button class="cc-icon-btn cc-icon-btn-sm cc-sk-del"
                   title="Delete skill"
@@ -318,6 +325,23 @@ export function createSkillsTab({ getWs }) {
       });
       row.querySelector(".cc-sk-view").addEventListener("click", () => {
         _send(getWs(), { type: "read_skill_body", name: sk.name });
+      });
+      row.querySelector(".cc-sk-refine")?.addEventListener("click", () => {
+        const proceed = confirm(
+          `Refine skill \"${sk.name}\" with the current model/backend? ` +
+          `A preview will be shown before applying changes.`
+        );
+        if (!proceed) return;
+        const ctx = (typeof getRuntimeContext === "function" ? getRuntimeContext() : {}) || {};
+        _send(getWs(), {
+          type: "refine_skill_preview",
+          name: sk.name,
+          model: ctx.model,
+          agent_backend: ctx.agent_backend,
+          api_key: ctx.api_key,
+          api_base: ctx.api_base,
+        });
+        showToast("Asking model to refine skill…", "info", 1800);
       });
       row.querySelector(".cc-sk-del")?.addEventListener("click", () => {
         if (!confirm(`Delete skill "${sk.name}"? This removes its files from disk.`)) return;
@@ -344,6 +368,15 @@ export function createSkillsTab({ getWs }) {
   $btnFolder.addEventListener("click", _onImportFolder);
   $btnZip   .addEventListener("click", () => $zipInput.click());
   $btnGit   .addEventListener("click", _onImportGit);
+  $addSkill ?.addEventListener("click", () => {
+    const choice = prompt("Add skill via: folder / zip / git", "folder");
+    if (!choice) return;
+    const c = choice.trim().toLowerCase();
+    if (c.startsWith("f")) _onImportFolder();
+    else if (c.startsWith("z")) $zipInput.click();
+    else if (c.startsWith("g")) _onImportGit();
+    else showToast("Use folder, zip, or git.", "warning", 2000);
+  });
 
   $zipInput.addEventListener("change", () => {
     const f = $zipInput.files?.[0];
@@ -483,6 +516,46 @@ export function createSkillsTab({ getWs }) {
     $modalMount.appendChild(overlay);
   }
 
+  function showRefineModal(name, originalBody, refinedBody) {
+    $modalMount.innerHTML = "";
+    const overlay = document.createElement("div");
+    overlay.className = "cc-modal-overlay";
+    overlay.innerHTML = `
+      <div class="cc-modal-card" style="max-width:min(1100px,96vw);width:min(1100px,96vw);">
+        <div class="cc-modal-header">
+          <div style="font-weight:800;color:var(--cc-accent);font-family:monospace;font-size:14px;">
+            Refine skill: ${escHtml(name)}
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <button class="cc-btn cc-btn-primary cc-refine-apply" style="font-size:12px;padding:6px 10px;">Apply</button>
+            <button class="cc-icon-btn cc-modal-close" title="Close">✕</button>
+          </div>
+        </div>
+        <div class="cc-modal-body cc-scroll" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div>
+            <div style="font-size:11px;color:var(--cc-fg-muted);margin-bottom:6px;">Current</div>
+            <pre style="margin:0;background:var(--cc-surface-2);border:1px solid var(--cc-border);padding:10px;border-radius:8px;white-space:pre-wrap;word-break:break-word;font-size:11px;line-height:1.5;">${escHtml(originalBody || "")}</pre>
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--cc-fg-muted);margin-bottom:6px;">Refined preview</div>
+            <textarea class="cc-refine-body" style="width:100%;min-height:360px;background:var(--cc-surface-2);color:var(--cc-fg);border:1px solid var(--cc-border);border-radius:8px;padding:10px;font-family:monospace;font-size:11px;line-height:1.5;resize:vertical;">${escHtml(refinedBody || "")}</textarea>
+          </div>
+        </div>
+      </div>
+    `;
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
+    overlay.querySelector(".cc-modal-close")?.addEventListener("click", () => overlay.remove());
+    overlay.querySelector(".cc-refine-apply")?.addEventListener("click", () => {
+      const refined = overlay.querySelector(".cc-refine-body")?.value || "";
+      _send(getWs(), { type: "apply_skill_refine", name, refined_body: refined });
+      showToast("Applying refined skill…", "info", 1500);
+      overlay.remove();
+    });
+    $modalMount.appendChild(overlay);
+  }
+
   /** Send a list_skills request when the WS is healthy. Returns true if sent. */
   function refresh() {
     const ws = getWs();
@@ -546,6 +619,12 @@ export function createSkillsTab({ getWs }) {
       } else if (msg.type === "skill_error") {
         console.warn("[ComfyClaw/skills] skill_error:", msg.error);
         showToast(msg.error || "Skill error", "error", 4500);
+      } else if (msg.type === "skill_refine_preview") {
+        showRefineModal(msg.name || "", msg.original_body || "", msg.refined_body || "");
+      } else if (msg.type === "skill_refine_result") {
+        if (msg.ok) {
+          showToast(`Refined skill saved: ${msg.name}`, "success", 2600);
+        }
       }
     },
   };
