@@ -519,5 +519,3 @@ class SkillsRegistry:
 
     def roots(self) -> list[tuple[str, str]]:
         return [(str(p), s) for p, s in self._roots]
-
-

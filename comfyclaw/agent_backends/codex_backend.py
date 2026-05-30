@@ -70,12 +70,7 @@ def _extract_agent_message_text(line: str) -> str:
         return ""
 
     # Legacy flat-shape codex builds (pre-SDK schema).
-    payload = (
-        evt.get("agent_message")
-        or evt.get("text")
-        or evt.get("delta")
-        or evt.get("content")
-    )
+    payload = evt.get("agent_message") or evt.get("text") or evt.get("delta") or evt.get("content")
     if isinstance(payload, str):
         return payload
     if isinstance(payload, dict):
@@ -142,7 +137,8 @@ class CodexBackend:
             "exec",
             "--json",
             "--skip-git-repo-check",
-            "--sandbox", "read-only",
+            "--sandbox",
+            "read-only",
         ]
         # Codex's allowed-model list is bound to the user's ChatGPT
         # subscription — it does NOT overlap with the LiteLLM model
@@ -153,7 +149,7 @@ class CodexBackend:
         # o3, … — is translated to a known-good codex id.  ``-c model=…``
         # beats any value in the user's ``~/.codex/config.toml`` for *this*
         # invocation only.
-        from ..chat_agent import _codex_pick_model
+        from comfyclaw.chat_agent import _codex_pick_model
 
         codex_model = _codex_pick_model(self.model)
         base_argv += ["-c", f'model="{codex_model}"']

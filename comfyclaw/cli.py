@@ -50,6 +50,21 @@ import sys
 import time
 from pathlib import Path
 
+from .model_bundles import (
+    MODEL_BUNDLES,
+    bundle_status,
+    download_model_file,
+    model_target,
+    probe_openai_compatible,
+)
+
+# Backward-compatible names used by tests and downstream scripts.
+_MODEL_BUNDLES = MODEL_BUNDLES
+_bundle_status = bundle_status
+_download_model_file = download_model_file
+_model_target = model_target
+_probe_openai_compatible = probe_openai_compatible
+
 # ─────────────────────────────────────────────────────────────────────────────
 # .env loader — runs at import time so env vars are available everywhere
 # ─────────────────────────────────────────────────────────────────────────────
@@ -137,6 +152,19 @@ def _env_score_weights(default: tuple[float, float] = (0.6, 0.4)) -> tuple[float
     return default
 
 
+def _env_api_base() -> str:
+    """Return an OpenAI-compatible API base from env, if configured."""
+    for name in ("COMFYCLAW_API_BASE", "OPENAI_API_BASE", "OPENAI_BASE_URL"):
+        raw = os.environ.get(name, "").strip()
+        if raw:
+            return raw
+    return ""
+
+
+def _env_path() -> Path:
+    return Path.cwd() / ".env"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Derived defaults
 # ─────────────────────────────────────────────────────────────────────────────
@@ -173,6 +201,36 @@ def _bundled_custom_node() -> Path:
     # Development / repo layout
     repo_node = Path(__file__).resolve().parent.parent.parent / "custom_nodes" / "ComfyClaw-Sync"
     return repo_node
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Local LLM and ComfyUI model helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _update_env_file(path: Path, updates: dict[str, str]) -> None:
+    """Create or update a simple KEY=value .env file while preserving comments."""
+    existing = path.read_text().splitlines() if path.exists() else []
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in existing:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            out.append(line)
+            continue
+        key, _sep, _val = line.partition("=")
+        key = key.strip()
+        if key in updates:
+            out.append(f"{key}={updates[key]}")
+            seen.add(key)
+        else:
+            out.append(line)
+    missing = [key for key in updates if key not in seen]
+    if missing and out and out[-1].strip():
+        out.append("")
+    for key in missing:
+        out.append(f"{key}={updates[key]}")
+    path.write_text("\n".join(out).rstrip() + "\n")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -351,6 +409,8 @@ def _cmd_run(args: argparse.Namespace, dry: bool = False) -> None:
         run_mode=run_mode,
         modality=getattr(args, "modality", "image"),
         video_frames=getattr(args, "video_frames", 6),
+        generation_timeout=getattr(args, "generation_timeout", 0),
+        api_base=(getattr(args, "api_base", "") or "").strip() or None,
     )
 
     verifier_label = cfg.verifier_model or f"{cfg.model} (shared)"
@@ -358,6 +418,8 @@ def _cmd_run(args: argparse.Namespace, dry: bool = False) -> None:
     print(f"[cli] Prompt         : {args.prompt!r}")
     print(f"[cli] Agent model    : {cfg.model}")
     print(f"[cli] Agent backend  : {cfg.agent_backend}")
+    if cfg.api_base:
+        print(f"[cli] API base       : {cfg.api_base}")
     print(f"[cli] Run mode       : {cfg.run_mode}")
     print(f"[cli] Verifier mode  : {cfg.verifier_mode}")
     if cfg.verifier_mode in ("vlm", "hybrid"):
@@ -422,12 +484,16 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         "run_mode": getattr(args, "mode", "auto"),
         "modality": getattr(args, "modality", "image"),
         "video_frames": getattr(args, "video_frames", 6),
+        "generation_timeout": getattr(args, "generation_timeout", 0),
+        "api_base": (getattr(args, "api_base", "") or "").strip() or None,
     }
 
     # ── Print the config block first ────────────────────────────────────
     print("\n[cli] ComfyClaw serve mode")
     print(f"[cli] Agent backend  : {base_cfg['agent_backend']}")
     print(f"[cli] Agent model    : {args.model}")
+    if base_cfg["api_base"]:
+        print(f"[cli] API base       : {base_cfg['api_base']}")
     print(f"[cli] Verifier model : {base_cfg['verifier_model'] or '(same as agent)'}")
     print(f"[cli] Run mode       : {base_cfg['run_mode']}")
     print(f"[cli] Modality       : {base_cfg['modality']}")
@@ -711,6 +777,119 @@ def _cmd_node_path(_args: argparse.Namespace) -> None:
     print(_bundled_custom_node())
 
 
+def _cmd_configure_local_llm(args: argparse.Namespace) -> None:
+    """Print or write local LLM settings for OpenAI-compatible servers."""
+    provider = args.provider
+    model = args.model.strip()
+    api_base = args.api_base.strip().rstrip("/")
+    if provider == "vllm":
+        model_value = model if model.startswith("openai/") else f"openai/{model}"
+        default_key = "local-vllm"
+    elif provider == "ollama":
+        model_value = model if model.startswith("ollama/") else f"ollama/{model}"
+        default_key = ""
+    else:
+        model_value = model
+        default_key = "local"
+
+    updates = {
+        "COMFYCLAW_AGENT_BACKEND": "litellm",
+        "COMFYCLAW_MODEL": model_value,
+        "COMFYCLAW_API_BASE": api_base,
+        "COMFYCLAW_RUN_MODE": args.run_mode,
+    }
+    if args.verifier_model:
+        updates["COMFYCLAW_VERIFIER_MODEL"] = args.verifier_model.strip()
+    elif args.run_mode == "manual":
+        updates["COMFYCLAW_VERIFIER_MODEL"] = model_value
+    if default_key:
+        updates["OPENAI_API_KEY"] = os.environ.get("OPENAI_API_KEY", default_key)
+
+    print("\n[local-llm] Recommended environment")
+    for key, value in updates.items():
+        print(f"{key}={value}")
+
+    if args.check:
+        ok, detail, models = probe_openai_compatible(api_base)
+        state = "OK" if ok else "FAILED"
+        print(f"\n[local-llm] Endpoint check: {state} — {detail}")
+        if (
+            ok
+            and provider == "vllm"
+            and model not in models
+            and model_value.removeprefix("openai/") not in models
+        ):
+            print(f"[local-llm] Warning: requested model {model!r} was not listed by /v1/models.")
+
+    if args.write_env:
+        env_file = Path(args.env_file).expanduser() if args.env_file else _env_path()
+        _update_env_file(env_file, updates)
+        print(f"\n[local-llm] Wrote {env_file}")
+    else:
+        print("\n[local-llm] Re-run with --write-env to update .env automatically.")
+
+    if provider == "vllm":
+        served = model_value.removeprefix("openai/")
+        print("\n[local-llm] vLLM launch hint for shared GPU video generation:")
+        print(
+            "vllm serve "
+            f"{served} --host 127.0.0.1 --port {api_base.rsplit(':', 1)[-1].split('/')[0] if ':' in api_base else '8000'} "
+            "--enable-auto-tool-choice --tool-call-parser qwen3_xml "
+            "--max-model-len 32768 --gpu-memory-utilization 0.65 --max-num-seqs 2"
+        )
+
+
+def _cmd_models(args: argparse.Namespace) -> None:
+    """List, check, or download known ComfyUI model bundles."""
+    action = args.models_action
+
+    if action == "list":
+        print("\n[models] Known bundles")
+        for name, bundle in MODEL_BUNDLES.items():
+            print(f"  {name:<18} {bundle.description}")
+        return
+
+    comfyui_dir = (
+        Path(args.comfyui_dir).expanduser()
+        if getattr(args, "comfyui_dir", None)
+        else _comfyui_dir()
+    )
+    bundle = MODEL_BUNDLES[args.bundle]
+    statuses = bundle_status(comfyui_dir, bundle)
+    print(f"\n[models] {bundle.name}: {bundle.description}")
+    print(f"[models] ComfyUI dir: {comfyui_dir}")
+    for mf, target, exists in statuses:
+        required = "optional" if mf.optional else "required"
+        marker = "OK" if exists else "missing"
+        print(f"  {marker:<7} {required:<8} {target}")
+        if not exists:
+            print(f"           source: hf://{mf.repo}/{mf.path}")
+    for note in bundle.notes:
+        print(f"[models] Note: {note}")
+
+    missing = [(mf, target) for mf, target, exists in statuses if not exists]
+    if action == "check":
+        required_missing = [mf for mf, _target in missing if not mf.optional]
+        if required_missing:
+            sys.exit(1)
+        return
+
+    if not missing:
+        print("[models] All files already present.")
+        return
+
+    selected = [(mf, target) for mf, target in missing if args.include_optional or not mf.optional]
+    if not selected:
+        print("[models] Only optional files are missing. Use --include-optional to download them.")
+        return
+
+    print(f"\n[models] Downloading {len(selected)} file(s). Large model files can take a while.")
+    for mf, target in selected:
+        print(f"[models] Downloading {mf.dest_name} → {target}")
+        download_model_file(mf, target)
+    print("[models] Done. Restart ComfyUI so model dropdowns refresh.")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # `comfyclaw doctor` — pre-flight check
 # ─────────────────────────────────────────────────────────────────────────────
@@ -779,6 +958,26 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
             "none set — only local providers (e.g. ollama/*) will work",
         )
         warnings += 1
+
+    # ── 3b. OpenAI-compatible local endpoint ─────────────────────────────
+    configured_model = _env_str("COMFYCLAW_MODEL", "")
+    api_base = _env_api_base()
+    if api_base and configured_model.startswith("openai/"):
+        ok, detail, models = probe_openai_compatible(api_base, timeout=3)
+        if ok:
+            expected = configured_model.removeprefix("openai/")
+            if models and expected not in models:
+                _doctor_row(
+                    "warn",
+                    "Local LLM endpoint",
+                    f"reachable at {api_base}, but {expected!r} not listed ({detail})",
+                )
+                warnings += 1
+            else:
+                _doctor_row("ok", "Local LLM endpoint", f"{api_base} → {detail}")
+        else:
+            _doctor_row("warn", "Local LLM endpoint", f"{api_base} probe failed: {detail}")
+            warnings += 1
 
     # ── 4. ComfyUI reachable ─────────────────────────────────────────────
     addr = getattr(args, "comfyui_addr", None) or _server_addr()
@@ -1065,6 +1264,16 @@ def _build_parser() -> argparse.ArgumentParser:
             ),
         )
         p.add_argument(
+            "--api-base",
+            default=_env_api_base(),
+            metavar="URL",
+            help=(
+                "OpenAI-compatible API base URL for LiteLLM, e.g. "
+                "http://127.0.0.1:18000/v1. Defaults to COMFYCLAW_API_BASE, "
+                "OPENAI_API_BASE, or OPENAI_BASE_URL."
+            ),
+        )
+        p.add_argument(
             "--debug-no-generate",
             action="store_true",
             default=_env_bool("COMFYCLAW_DEBUG_NO_GENERATE", False),
@@ -1097,6 +1306,16 @@ def _build_parser() -> argparse.ArgumentParser:
                 "Number of frames to sample per clip for the video verifier. "
                 "Default 6 (first, last, and 4 evenly-spaced). Only used when "
                 "--modality=video."
+            ),
+        )
+        p.add_argument(
+            "--generation-timeout",
+            type=int,
+            default=_env_int("COMFYCLAW_GENERATION_TIMEOUT", 0),
+            metavar="SECONDS",
+            help=(
+                "Seconds to wait for ComfyUI generation. Default 600 for image, "
+                "2400 for video. Overrides COMFYCLAW_GENERATION_TIMEOUT."
             ),
         )
 
@@ -1149,6 +1368,83 @@ def _build_parser() -> argparse.ArgumentParser:
 
     np_p = sub.add_parser("node-path", help="Print path to the bundled ComfyClaw-Sync plugin")
     np_p.set_defaults(func=_cmd_node_path)
+
+    local_p = sub.add_parser(
+        "configure-local-llm",
+        help="Generate/check .env settings for local vLLM/Ollama/OpenAI-compatible LLMs",
+    )
+    local_p.add_argument(
+        "--provider",
+        choices=["vllm", "ollama", "openai-compatible"],
+        default="vllm",
+        help="Local provider style. Default: vllm",
+    )
+    local_p.add_argument(
+        "--model",
+        required=True,
+        help="Model id, e.g. Qwen/Qwen3.6-27B for vLLM or llama3.1 for Ollama.",
+    )
+    local_p.add_argument(
+        "--api-base",
+        default="http://127.0.0.1:18000/v1",
+        help="OpenAI-compatible API base URL. Default: http://127.0.0.1:18000/v1",
+    )
+    local_p.add_argument(
+        "--verifier-model",
+        default="",
+        help="Optional VLM verifier model. Leave empty in manual mode.",
+    )
+    local_p.add_argument(
+        "--run-mode",
+        choices=["manual", "auto", "copilot"],
+        default="manual",
+        help="Default run mode to write. Use manual when the local model is text-only.",
+    )
+    local_p.add_argument(
+        "--write-env",
+        action="store_true",
+        help="Write the recommended settings into .env.",
+    )
+    local_p.add_argument(
+        "--env-file",
+        default="",
+        help="Optional .env path to update. Defaults to ./.env.",
+    )
+    local_p.add_argument(
+        "--check",
+        action="store_true",
+        help="Probe <api-base>/models and report available model ids.",
+    )
+    local_p.set_defaults(func=_cmd_configure_local_llm)
+
+    models_p = sub.add_parser(
+        "models",
+        help="List, check, or download known ComfyUI image/video model bundles",
+    )
+    models_sub = models_p.add_subparsers(dest="models_action", required=True)
+    models_sub.add_parser("list", help="List known bundles").set_defaults(func=_cmd_models)
+
+    def _add_model_bundle_args(p: argparse.ArgumentParser) -> None:
+        p.add_argument("bundle", choices=sorted(MODEL_BUNDLES), help="Model bundle name")
+        p.add_argument(
+            "--comfyui-dir",
+            default=None,
+            metavar="DIR",
+            help="ComfyUI installation directory (or set COMFYUI_DIR in .env)",
+        )
+
+    check_p = models_sub.add_parser("check", help="Check whether a bundle is installed")
+    _add_model_bundle_args(check_p)
+    check_p.set_defaults(func=_cmd_models)
+
+    download_p = models_sub.add_parser("download", help="Download a bundle into ComfyUI/models")
+    _add_model_bundle_args(download_p)
+    download_p.add_argument(
+        "--include-optional",
+        action="store_true",
+        help="Also download optional files such as Lightning LoRAs.",
+    )
+    download_p.set_defaults(func=_cmd_models)
 
     doctor_p = sub.add_parser(
         "doctor",

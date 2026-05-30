@@ -350,14 +350,16 @@ class WorkflowManager:
 
         _OUTPUT_NODES = (
             # Image savers
-            "SaveImage", "PreviewImage",
+            "SaveImage",
+            "PreviewImage",
             # Video savers (native + community)
-            "SaveAnimatedWEBP", "SaveAnimatedPNG", "SaveVideo",
-            "VHS_VideoCombine", "WanVideoDecode",
+            "SaveAnimatedWEBP",
+            "SaveAnimatedPNG",
+            "SaveVideo",
+            "VHS_VideoCombine",
+            "WanVideoDecode",
         )
-        has_output = any(
-            n.get("class_type") in _OUTPUT_NODES for n in workflow.values()
-        )
+        has_output = any(n.get("class_type") in _OUTPUT_NODES for n in workflow.values())
         if not has_output:
             errors.append(
                 "No output node (SaveImage / PreviewImage / SaveAnimatedWEBP / "

@@ -96,8 +96,12 @@ class TestCollectVideos:
             "outputs": {
                 "9": {
                     "videos": [
-                        {"filename": "clip.mp4", "subfolder": "", "type": "output",
-                         "format": "mp4"},
+                        {
+                            "filename": "clip.mp4",
+                            "subfolder": "",
+                            "type": "output",
+                            "format": "mp4",
+                        },
                     ]
                 }
             }
@@ -112,9 +116,7 @@ class TestCollectVideos:
         client.server_address = "x"
         client.client_id = "y"
         history = {
-            "outputs": {
-                "9": {"gifs": [{"filename": "a.gif", "subfolder": "", "type": "output"}]}
-            }
+            "outputs": {"9": {"gifs": [{"filename": "a.gif", "subfolder": "", "type": "output"}]}}
         }
         with patch.object(client, "get_image", return_value=b"GIF89aXXX"):
             out = client.collect_videos(history)
@@ -145,14 +147,51 @@ class TestCollectVideos:
         client.server_address = "x"
         client.client_id = "y"
         history = {
-            "outputs": {
-                "9": {"images": [{"filename": "x.png", "subfolder": "", "type": "output"}]}
-            }
+            "outputs": {"9": {"images": [{"filename": "x.png", "subfolder": "", "type": "output"}]}}
         }
         with patch.object(client, "get_image", return_value=b"PNG") as gi:
             out = client.collect_videos(history)
         assert out == []
         gi.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# ComfyClient.wait_for_completion error metadata
+# ---------------------------------------------------------------------------
+
+
+class TestWaitForCompletionErrors:
+    def test_execution_error_includes_node_and_traceback(self) -> None:
+        client = ComfyClient.__new__(ComfyClient)
+        client.server_address = "x"
+        client.client_id = "y"
+        client.get_history = MagicMock(
+            return_value={
+                "pid": {
+                    "status": {
+                        "status_str": "error",
+                        "messages": [
+                            [
+                                "execution_error",
+                                {
+                                    "node_id": "10",
+                                    "node_type": "KSampler",
+                                    "exception_message": "[Errno 5] Input/output error",
+                                    "traceback": ["tqdm/std.py", "app/logger.py"],
+                                },
+                            ]
+                        ],
+                    }
+                }
+            }
+        )
+
+        out = client.wait_for_completion("pid", timeout=1, poll_interval=0)
+
+        assert "node 10 KSampler" in out["error"]
+        assert out["error_node_id"] == "10"
+        assert out["error_node_type"] == "KSampler"
+        assert out["error_traceback"] == ["tqdm/std.py", "app/logger.py"]
 
 
 # ---------------------------------------------------------------------------
@@ -193,9 +232,7 @@ class TestExtractFrames:
 
 
 class TestVideoVerifier:
-    def test_verify_packages_frames_into_temporal_prompt(
-        self, animated_gif_bytes: bytes
-    ) -> None:
+    def test_verify_packages_frames_into_temporal_prompt(self, animated_gif_bytes: bytes) -> None:
         verifier = VideoVerifier.__new__(VideoVerifier)
         from comfyclaw.verifier import ClawVerifier
 
@@ -220,7 +257,10 @@ class TestVideoVerifier:
             messages = kwargs.get("messages") or []
             call_log.append(messages)
             content = messages[-1]["content"] if messages else ""
-            if isinstance(content, str) and "Analyze the following image generation prompt" in content:
+            if (
+                isinstance(content, str)
+                and "Analyze the following image generation prompt" in content
+            ):
                 return _litellm_text_response('["Is there a fox?", "Is it red?"]')
             if isinstance(content, list):
                 text_block = next((c for c in content if c.get("type") == "text"), {})
@@ -228,12 +268,16 @@ class TestVideoVerifier:
                 if "Answer only 'yes' or 'no'" in txt:
                     return _litellm_text_response("yes")
                 # detailed analysis
-                return _litellm_text_response(json.dumps({
-                    "overall_assessment": "decent",
-                    "score": 0.75,
-                    "region_issues": [],
-                    "evolution_suggestions": [],
-                }))
+                return _litellm_text_response(
+                    json.dumps(
+                        {
+                            "overall_assessment": "decent",
+                            "score": 0.75,
+                            "region_issues": [],
+                            "evolution_suggestions": [],
+                        }
+                    )
+                )
             return _litellm_text_response("yes")
 
         with patch("comfyclaw.video_verifier.litellm.completion", side_effect=_fake_completion):
@@ -252,7 +296,8 @@ class TestVideoVerifier:
         # The per-question messages should contain multiple image blocks
         # (the temporal frame sequence), not just one.
         multi_image_calls = [
-            m for m in call_log
+            m
+            for m in call_log
             if isinstance(m[-1]["content"], list)
             and sum(1 for c in m[-1]["content"] if c.get("type") == "image_url") >= 2
         ]

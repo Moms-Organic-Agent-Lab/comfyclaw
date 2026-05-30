@@ -707,9 +707,7 @@ class CodexAuthFlow(_BaseFlow):
         full_buf = "\n".join(self._stdout_buffer)
         lower = full_buf.lower()
         wrapper_spawn_failed = (
-            "spawnargs" in lower
-            and "codex-darwin" in lower
-            or "codex-linux" in lower
+            "spawnargs" in lower and "codex-darwin" in lower or "codex-linux" in lower
         )
         if rc != 0:
             if wrapper_spawn_failed and self._mode == "browser":

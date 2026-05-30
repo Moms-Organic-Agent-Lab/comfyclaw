@@ -135,12 +135,12 @@ def phase_a_handbuilt() -> None:
         server_address=os.environ.get("COMFYUI_ADDR", "127.0.0.1:8000"),
         model="anthropic/claude-haiku-4-5-20251001",  # cheap; we won't actually invoke
         max_iterations=1,
-        sync_port=0,                                   # disable WebSocket for the test
+        sync_port=0,  # disable WebSocket for the test
         # skills_dir=None: agent now picks up bundled built-in skills
         # automatically (SkillsRegistry default root).
         modality="video",
         video_frames=4,
-        run_mode="manual",                             # skip verifier; we just want dry-run
+        run_mode="manual",  # skip verifier; we just want dry-run
     )
 
     with ClawHarness.from_workflow_dict(WAN22_WORKFLOW, cfg) as h:
@@ -215,14 +215,15 @@ def phase_b_live(prompt: str) -> None:
         # through the agent's on_agent_event hook).
         _orig_event = h._on_agent_event
 
-        def _capture_event(event_type: str, content: str,
-                           tool_name: str = "", tool_args: dict | None = None) -> None:
+        def _capture_event(
+            event_type: str, content: str, tool_name: str = "", tool_args: dict | None = None
+        ) -> None:
             if content:
                 final_rationale.append(content)
             _orig_event(event_type, content, tool_name, tool_args)
 
-        h._on_workflow_change = _capture          # type: ignore[method-assign]
-        h._on_agent_event = _capture_event        # type: ignore[method-assign]
+        h._on_workflow_change = _capture  # type: ignore[method-assign]
+        h._on_agent_event = _capture_event  # type: ignore[method-assign]
 
         h.run(prompt=prompt, dry_run=True)
 
@@ -246,22 +247,40 @@ def phase_b_live(prompt: str) -> None:
     # whether the agent built a video graph or an image fallback.
     errors = WorkflowManager.validate(final_workflow)
     _expect(not errors, f"Agent's workflow validates clean (errors={errors})")
-    _expect(any("Sampler" in c or "Sample" in c for c in classes),
-            "agent placed a sampler")
-    _expect(any(c in classes for c in (
-        "UNETLoader", "CheckpointLoaderSimple",
-        "WanVideoModelLoader", "HunyuanVideoModelLoader",
-    )), "agent placed a model loader")
+    _expect(any("Sampler" in c or "Sample" in c for c in classes), "agent placed a sampler")
+    _expect(
+        any(
+            c in classes
+            for c in (
+                "UNETLoader",
+                "CheckpointLoaderSimple",
+                "WanVideoModelLoader",
+                "HunyuanVideoModelLoader",
+            )
+        ),
+        "agent placed a model loader",
+    )
 
-    has_video_latent = any(c in classes for c in (
-        "EmptyHunyuanLatentVideo",
-        "EmptyMochiLatentVideo", "EmptyLTXVLatentVideo",
-        "EmptyCosmosLatentVideo", "WanVideoEmptyLatent",
-    ))
-    has_video_saver = any(c in classes for c in (
-        "SaveAnimatedWEBP", "SaveAnimatedPNG", "SaveVideo",
-        "VHS_VideoCombine", "WanVideoDecode",
-    ))
+    has_video_latent = any(
+        c in classes
+        for c in (
+            "EmptyHunyuanLatentVideo",
+            "EmptyMochiLatentVideo",
+            "EmptyLTXVLatentVideo",
+            "EmptyCosmosLatentVideo",
+            "WanVideoEmptyLatent",
+        )
+    )
+    has_video_saver = any(
+        c in classes
+        for c in (
+            "SaveAnimatedWEBP",
+            "SaveAnimatedPNG",
+            "SaveVideo",
+            "VHS_VideoCombine",
+            "WanVideoDecode",
+        )
+    )
 
     if has_video_weights:
         # Strict path: video weights exist, the agent should produce a real
@@ -275,10 +294,17 @@ def phase_b_live(prompt: str) -> None:
         # video-builder skill demands).
         rationale_blob = "\n".join(final_rationale).lower()
         flagged_missing = any(
-            kw in rationale_blob for kw in (
-                "no video model", "needs to install", "video generation model",
-                "wan2", "wan 2", "hunyuan", "no video weights",
-                "cannot generate", "cannot produce video",
+            kw in rationale_blob
+            for kw in (
+                "no video model",
+                "needs to install",
+                "video generation model",
+                "wan2",
+                "wan 2",
+                "hunyuan",
+                "no video weights",
+                "cannot generate",
+                "cannot produce video",
             )
         )
         _expect(
@@ -299,12 +325,25 @@ def _probe_video_weights(server_address: str) -> bool:
             f"http://{server_address}/object_info/UNETLoader", timeout=4
         ) as resp:
             data = json.loads(resp.read())
-        models = data.get("UNETLoader", {}).get("input", {}).get(
-            "required", {}).get("unet_name", [[]])[0]
+        models = (
+            data.get("UNETLoader", {})
+            .get("input", {})
+            .get("required", {})
+            .get("unet_name", [[]])[0]
+        )
         return any(
-            any(tag in m.lower() for tag in (
-                "wan", "hunyuan", "svd", "ltx", "cosmos", "mochi", "animate",
-            ))
+            any(
+                tag in m.lower()
+                for tag in (
+                    "wan",
+                    "hunyuan",
+                    "svd",
+                    "ltx",
+                    "cosmos",
+                    "mochi",
+                    "animate",
+                )
+            )
             for m in models
         )
     except Exception as exc:
@@ -314,10 +353,14 @@ def _probe_video_weights(server_address: str) -> bool:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--live", action="store_true",
-                    help="Also run Phase B (real LLM agent, costs API tokens)")
-    ap.add_argument("--prompt", default="a slow dolly forward, a red fox walking "
-                    "through misty pine forest at dawn, cinematic")
+    ap.add_argument(
+        "--live", action="store_true", help="Also run Phase B (real LLM agent, costs API tokens)"
+    )
+    ap.add_argument(
+        "--prompt",
+        default="a slow dolly forward, a red fox walking "
+        "through misty pine forest at dawn, cinematic",
+    )
     args = ap.parse_args()
 
     phase_a_handbuilt()

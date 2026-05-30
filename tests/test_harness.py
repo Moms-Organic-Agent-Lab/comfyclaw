@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -284,7 +284,8 @@ class TestErrorHandling:
         cfg.max_iterations = 1
         cfg.max_repair_attempts = 0  # disable repairs for this test
         h = _make_harness(minimal_workflow, cfg, client=mock_client)
-        result = h.run("test")
+        with patch("comfyclaw.harness.time.sleep"):
+            result = h.run("test")
         assert result is None  # no image produced, but no crash
 
 
@@ -359,7 +360,8 @@ class TestRepairLoop:
         cfg.max_iterations = 1
         cfg.max_repair_attempts = 2
         h = _make_harness(minimal_workflow, cfg, client=mock_client)
-        result = h.run("test")
+        with patch("comfyclaw.harness.time.sleep"):
+            result = h.run("test")
 
         assert result is None
         assert len(h.memory) == 1
@@ -425,6 +427,48 @@ class TestRepairLoop:
         assert result == png
         # Agent: 1 normal + 1 execution repair = 2 calls
         assert h._agent.plan_and_patch.call_count == 2
+
+    def test_infra_execution_error_retries_without_agent_repair(
+        self, minimal_workflow: dict, cfg: HarnessConfig
+    ) -> None:
+        """Progress-bar/stderr failures should retry the same workflow instead
+        of asking the agent to make irrelevant topology changes."""
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 20
+        call_count = {"n": 0}
+
+        def queue_side_effect(_wf):
+            call_count["n"] += 1
+            return {"prompt_id": f"pid-{call_count['n']}"}
+
+        completion_responses = [
+            {
+                "error": "ComfyUI execution error: [Errno 5] Input/output error (node 10 KSampler)",
+                "error_node_id": "10",
+                "error_node_type": "KSampler",
+                "error_traceback": ["tqdm/std.py", "app/logger.py"],
+            },
+            {
+                "outputs": {
+                    "7": {"images": [{"filename": "t.png", "subfolder": "", "type": "output"}]}
+                }
+            },
+        ]
+        completion_iter = iter(completion_responses)
+
+        mock_client = MagicMock()
+        mock_client.queue_prompt.side_effect = queue_side_effect
+        mock_client.wait_for_completion.side_effect = lambda *a, **kw: next(completion_iter)
+        mock_client.collect_images.return_value = [png]
+
+        cfg.max_iterations = 1
+        cfg.max_repair_attempts = 2
+        h = _make_harness(minimal_workflow, cfg, client=mock_client)
+        result = h.run("test")
+
+        assert result == png
+        assert mock_client.queue_prompt.call_count == 2
+        # Agent called only for the normal evolution, not for a repair.
+        assert h._agent.plan_and_patch.call_count == 1
 
     def test_build_repair_feedback_content(
         self, minimal_workflow: dict, cfg: HarnessConfig

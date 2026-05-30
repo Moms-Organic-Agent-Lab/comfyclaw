@@ -207,7 +207,7 @@ _TOOLS: list[dict] = [
             "properties": {
                 "model_type": {
                     "type": "string",
-                    "description": "loras | controlnets | checkpoints | unets | vae | upscale_models | clip_vision",
+                    "description": "loras | controlnets | checkpoints | unets | vae | upscale_models | clip_vision | clip",
                 }
             },
             "required": ["model_type"],
@@ -993,6 +993,7 @@ class ClawAgent:
             "vae": ("VAELoader", "vae_name"),
             "upscale_models": ("UpscaleModelLoader", "model_name"),
             "clip_vision": ("CLIPVisionLoader", "clip_name"),
+            "clip": ("CLIPLoader", "clip_name"),
         }
         entry = type_map.get(model_type.lower())
         if not entry:

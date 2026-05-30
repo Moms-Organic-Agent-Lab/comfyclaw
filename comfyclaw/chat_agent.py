@@ -217,9 +217,15 @@ def _claude_cli_model(model: str) -> str:
 # like ``openai/gpt-5.5``, we strip the prefix and only forward it when
 # the suffix looks like something codex can actually accept.
 _CODEX_KNOWN_MODELS = {
-    "gpt-5", "gpt-5-codex", "gpt-5-mini", "gpt-5-nano",
-    "gpt-4.1", "gpt-4.1-mini",
-    "o3", "o3-mini", "o4-mini",
+    "gpt-5",
+    "gpt-5-codex",
+    "gpt-5-mini",
+    "gpt-5-nano",
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "o3",
+    "o3-mini",
+    "o4-mini",
 }
 
 
@@ -262,9 +268,13 @@ def _codex_pick_model(model: str) -> str:
 # matches the public model list documented by ``gemini -m`` help and
 # Google's pricing page.
 _GEMINI_KNOWN_MODELS = {
-    "gemini-2.5-pro", "gemini-2.5-flash",
-    "gemini-2.0-pro", "gemini-2.0-flash", "gemini-2.0-flash-lite",
-    "gemini-1.5-pro", "gemini-1.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.0-pro",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-pro",
+    "gemini-1.5-flash",
 }
 
 
@@ -599,8 +609,7 @@ async def _codex_chat_stream(
     #                               need to mutate the filesystem)
     # ``codex exec`` already implies a non-interactive ``approvalPolicy:
     # never`` so we don't need to pass it explicitly.
-    argv = [binary, "exec", "--json", "--skip-git-repo-check",
-            "--sandbox", "read-only"]
+    argv = [binary, "exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only"]
     # Codex's model registry is *not* the LiteLLM registry.  When the
     # user is signed in with a ChatGPT subscription, codex only accepts
     # a fixed list of model ids (``gpt-5``, ``gpt-5-codex``, ``o3``…) —
@@ -760,8 +769,7 @@ async def _codex_chat_stream(
                 # Strip our known-noise patterns from stderr too so the
                 # fallback block only shows lines that actually matter.
                 cleaned = "\n".join(
-                    ln for ln in err_text.splitlines()
-                    if ln.strip() and not _codex_is_noise(ln)
+                    ln for ln in err_text.splitlines() if ln.strip() and not _codex_is_noise(ln)
                 )
                 if rc != 0 or cleaned:
                     yield (

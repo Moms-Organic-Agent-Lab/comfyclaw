@@ -25,6 +25,7 @@ def _isolated_registry(skills_dir: str | Path | None) -> SkillsRegistry:
         include_user_root=False,
     )
 
+
 # ---------------------------------------------------------------------------
 # Sample SKILL.md content (valid frontmatter format)
 # ---------------------------------------------------------------------------

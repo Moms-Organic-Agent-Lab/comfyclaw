@@ -80,6 +80,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -652,16 +653,16 @@ class SyncServer:
     # model, so if one of them is configured we tell the panel to leave all
     # provider tabs unlocked.
     _PROVIDER_ENV: dict[str, tuple[str, ...]] = {
-        "anthropic":  ("ANTHROPIC_API_KEY",),
-        "openai":     ("OPENAI_API_KEY",),
-        "google":     ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+        "anthropic": ("ANTHROPIC_API_KEY",),
+        "openai": ("OPENAI_API_KEY",),
+        "google": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
         # Ollama is local — no key needed.  Marker stays empty so the panel
         # always shows it (we don't probe the daemon here).
-        "ollama":     (),
+        "ollama": (),
     }
     _WILDCARD_ENV: dict[str, tuple[str, ...]] = {
         "openrouter": ("OPENROUTER_API_KEY",),
-        "azure":      ("AZURE_API_KEY",),
+        "azure": ("AZURE_API_KEY",),
     }
 
     async def _send_provider_keys(self, ws: Any) -> None:
@@ -719,8 +720,189 @@ class SyncServer:
             return
         asyncio.run_coroutine_threadsafe(self._send_agent_backends(ws), self._loop)
 
+    def _comfyui_dir(self) -> Path:
+        raw = os.environ.get("COMFYUI_DIR", "").strip()
+        if raw:
+            return Path(raw).expanduser()
+        return Path.home() / "Documents" / "ComfyUI"
+
+    async def _handle_local_llm_check(self, ws: Any, msg: dict) -> None:
+        from .model_bundles import probe_openai_compatible
+
+        api_base = (
+            msg.get("api_base")
+            or os.environ.get("COMFYCLAW_API_BASE")
+            or os.environ.get("OPENAI_API_BASE")
+            or ""
+        ).strip()
+        model = (msg.get("model") or os.environ.get("COMFYCLAW_MODEL") or "").strip()
+        if not api_base:
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "local_llm_status",
+                        "ok": False,
+                        "detail": "Missing API base URL.",
+                        "models": [],
+                        "model": model,
+                        "api_base": api_base,
+                    }
+                )
+            )
+            return
+
+        loop = asyncio.get_running_loop()
+        ok, detail, models = await loop.run_in_executor(
+            None, lambda: probe_openai_compatible(api_base, timeout=5)
+        )
+        expected = model.removeprefix("openai/")
+        listed = not expected or expected in models or model in models
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "local_llm_status",
+                    "ok": ok and listed,
+                    "reachable": ok,
+                    "model_listed": listed,
+                    "detail": detail
+                    if listed
+                    else f"Endpoint reachable, but {model!r} was not listed.",
+                    "models": models,
+                    "model": model,
+                    "api_base": api_base,
+                }
+            )
+        )
+
+    async def _send_model_bundle_status(self, ws: Any, bundle_name: str) -> None:
+        from .model_bundles import MODEL_BUNDLES, bundle_status
+
+        bundle = MODEL_BUNDLES.get(bundle_name)
+        if not bundle:
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "model_bundle_status",
+                        "ok": False,
+                        "bundle": bundle_name,
+                        "error": f"Unknown model bundle: {bundle_name}",
+                    }
+                )
+            )
+            return
+        comfyui_dir = self._comfyui_dir()
+        statuses = bundle_status(comfyui_dir, bundle)
+        files = [
+            {
+                "name": mf.dest_name,
+                "repo": mf.repo,
+                "path": mf.path,
+                "target": str(target),
+                "optional": mf.optional,
+                "exists": exists,
+            }
+            for mf, target, exists in statuses
+        ]
+        required_missing = [f for f in files if not f["optional"] and not f["exists"]]
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "model_bundle_status",
+                    "ok": not required_missing,
+                    "bundle": bundle.name,
+                    "description": bundle.description,
+                    "comfyui_dir": str(comfyui_dir),
+                    "files": files,
+                    "notes": list(bundle.notes),
+                }
+            )
+        )
+
+    async def _handle_model_bundle_download(self, ws: Any, msg: dict) -> None:
+        from .model_bundles import MODEL_BUNDLES, bundle_status, download_model_file
+
+        bundle_name = msg.get("bundle", "")
+        include_optional = bool(msg.get("include_optional", False))
+        bundle = MODEL_BUNDLES.get(bundle_name)
+        if not bundle:
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "model_bundle_download_complete",
+                        "bundle": bundle_name,
+                        "success": False,
+                        "error": f"Unknown model bundle: {bundle_name}",
+                    }
+                )
+            )
+            return
+        comfyui_dir = self._comfyui_dir()
+        statuses = bundle_status(comfyui_dir, bundle)
+        selected = [
+            (mf, target)
+            for mf, target, exists in statuses
+            if not exists and (include_optional or not mf.optional)
+        ]
+        if not selected:
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "model_bundle_download_complete",
+                        "bundle": bundle.name,
+                        "success": True,
+                        "detail": "All selected files are already present.",
+                    }
+                )
+            )
+            await self._send_model_bundle_status(ws, bundle.name)
+            return
+
+        async def send(msg_out: dict) -> None:
+            await ws.send(json.dumps(msg_out))
+
+        async def run_downloads() -> None:
+            loop = asyncio.get_running_loop()
+            for idx, (mf, target) in enumerate(selected, start=1):
+                await send(
+                    {
+                        "type": "model_bundle_download_progress",
+                        "bundle": bundle.name,
+                        "index": idx,
+                        "total": len(selected),
+                        "file": mf.dest_name,
+                        "target": str(target),
+                        "state": "downloading",
+                    }
+                )
+                try:
+                    await loop.run_in_executor(
+                        None, lambda mf=mf, target=target: download_model_file(mf, target)
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    await send(
+                        {
+                            "type": "model_bundle_download_complete",
+                            "bundle": bundle.name,
+                            "success": False,
+                            "error": f"{mf.dest_name}: {exc}",
+                        }
+                    )
+                    await self._send_model_bundle_status(ws, bundle.name)
+                    return
+            await send(
+                {
+                    "type": "model_bundle_download_complete",
+                    "bundle": bundle.name,
+                    "success": True,
+                    "detail": "Download complete. Restart ComfyUI so model dropdowns refresh.",
+                }
+            )
+            await self._send_model_bundle_status(ws, bundle.name)
+
+        asyncio.ensure_future(run_downloads())
+
     async def _handle_backend_install_start(self, ws: Any, msg: dict) -> None:
-        from .setup_flows import CliInstallFlow, _INSTALL_COMMANDS
+        from .setup_flows import _INSTALL_COMMANDS, CliInstallFlow
 
         backend = msg.get("backend", "claude-code")
         if backend not in _INSTALL_COMMANDS:
@@ -843,9 +1025,7 @@ class SyncServer:
                 self._setup_flows.pop(ws)
                 self._broadcast_agent_backends(ws)
 
-            flow = GeminiLogoutFlow(
-                on_progress=gemini_on_progress, on_complete=gemini_on_complete
-            )
+            flow = GeminiLogoutFlow(on_progress=gemini_on_progress, on_complete=gemini_on_complete)
             prev = self._setup_flows.set(ws, flow)
             if prev:
                 try:
@@ -912,13 +1092,9 @@ class SyncServer:
             self._broadcast_agent_backends(ws)
 
         if backend == "claude-code":
-            flow = ClaudeAuthFlow(
-                on_url=on_url, on_progress=on_progress, on_complete=on_complete
-            )
+            flow = ClaudeAuthFlow(on_url=on_url, on_progress=on_progress, on_complete=on_complete)
         else:  # backend == "codex"
-            flow = CodexAuthFlow(
-                on_url=on_url, on_progress=on_progress, on_complete=on_complete
-            )
+            flow = CodexAuthFlow(on_url=on_url, on_progress=on_progress, on_complete=on_complete)
 
         prev = self._setup_flows.set(ws, flow)
         if prev:
@@ -1376,6 +1552,16 @@ class SyncServer:
         # ── Provider API-key probe (LiteLLM filtering) ───────────────────────
         elif t == "list_provider_keys":
             await self._send_provider_keys(ws)
+
+        # ── Local setup helpers used by the ComfyUI panel ───────────────────
+        elif t == "local_llm_check":
+            asyncio.ensure_future(self._handle_local_llm_check(ws, msg))
+
+        elif t == "model_bundle_check":
+            await self._send_model_bundle_status(ws, msg.get("bundle", ""))
+
+        elif t == "model_bundle_download":
+            await self._handle_model_bundle_download(ws, msg)
 
         # ── Backend setup flows (install + OAuth) ────────────────────────────
         elif t == "backend_install_start":

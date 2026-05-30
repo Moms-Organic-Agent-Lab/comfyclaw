@@ -24,9 +24,7 @@ def _make_agent(
     from comfyclaw.skill_manager import SkillsRegistry
 
     # Empty registry — tests mock all tool dispatch and never inspect skills.
-    agent.skill_manager = SkillsRegistry(
-        include_builtin_root=False, include_user_root=False
-    )
+    agent.skill_manager = SkillsRegistry(include_builtin_root=False, include_user_root=False)
     agent.on_change = None
     agent.on_agent_event = None
     agent.max_tool_rounds = 10

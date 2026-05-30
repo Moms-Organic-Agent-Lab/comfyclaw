@@ -39,8 +39,13 @@ from .workflow import WorkflowManager
 # These are NOT workflow logic errors — the agent should not attempt a repair;
 # instead, harness should retry the same workflow after a short pause.
 _INFRA_ERROR_SIGNALS = (
+    "[Errno 5] Input/output error",
     "[Errno 32] Broken pipe",
     "BrokenPipeError",
+    "app/logger.py",
+    "status_printer",
+    "sys.stderr",
+    "tqdm",
 )
 
 _StatusCallback = Callable[[str, int, str], None]
@@ -100,6 +105,7 @@ class HarnessConfig:
     run_mode: str = "auto"  # "manual" | "auto" | "copilot"
     modality: str = "image"  # "image" | "video"
     video_frames: int = 6  # frames sampled per clip for the verifier
+    generation_timeout: int = 0  # seconds; 0 = image/video defaults
     """
     Pin the image-generation model (checkpoint / UNET) used by ComfyUI.
 
@@ -479,8 +485,9 @@ class ClawHarness:
                 continue
 
             # ── Wait for completion ────────────────────────────────────────
+            timeout = self._generation_timeout()
             try:
-                history = self._client.wait_for_completion(prompt_id, timeout=600)
+                history = self._client.wait_for_completion(prompt_id, timeout=timeout)
             except TimeoutError as exc:
                 print(f"[ClawHarness] ❌ Timeout: {exc}")
                 self._record_error(iteration, wm.workflow, str(exc))
@@ -495,10 +502,10 @@ class ClawHarness:
                 # ── Infra fault (BrokenPipe from tqdm stderr) — not a workflow bug
                 # Retry the SAME workflow once after a short pause; do NOT ask the
                 # agent to repair anything.
-                if any(sig in exec_error for sig in _INFRA_ERROR_SIGNALS):
+                if self._is_infra_error(history):
                     print(
                         "[ClawHarness] ⚠  Transient infrastructure error detected "
-                        "(BrokenPipe / progress-bar stderr flush). Waiting 5 s then "
+                        "(progress-bar / stderr flush). Waiting 5 s then "
                         "retrying the same workflow once."
                     )
                     time.sleep(5)
@@ -506,7 +513,7 @@ class ClawHarness:
                         rq_retry = self._client.queue_prompt(wm.workflow)
                         retry_pid = rq_retry["prompt_id"]
                         print(f"[ClawHarness] 🔄 Infra-retry submitted ({retry_pid}).")
-                        history = self._client.wait_for_completion(retry_pid, timeout=600)
+                        history = self._client.wait_for_completion(retry_pid, timeout=timeout)
                     except Exception as infra_exc:
                         print(f"[ClawHarness] ❌ Infra-retry exception: {infra_exc}")
                         self._record_error(iteration, wm.workflow, str(infra_exc))
@@ -517,6 +524,11 @@ class ClawHarness:
                     if "error" in history:
                         infra_msg = history["error"]
                         print(f"[ClawHarness] ❌ Infra-retry also failed: {infra_msg}")
+                        print(
+                            "[ClawHarness]    This usually means the ComfyUI process was "
+                            "started with a closed stderr/stdout. Restart ComfyUI with "
+                            "output redirected to a real log file, then retry."
+                        )
                         self._record_error(iteration, wm.workflow, infra_msg)
                         self._evolution_log.record(evo)
                         last_result = None
@@ -568,7 +580,9 @@ class ClawHarness:
 
                     # Wait for the repaired workflow to finish.
                     try:
-                        history = self._client.wait_for_completion(repaired_prompt_id, timeout=600)
+                        history = self._client.wait_for_completion(
+                            repaired_prompt_id, timeout=timeout
+                        )
                     except TimeoutError as exc:
                         print(f"[ClawHarness] ❌ Timeout after repair: {exc}")
                         self._record_error(iteration, wm.workflow, str(exc))
@@ -590,9 +604,7 @@ class ClawHarness:
                     self._evolution_log.record(evo)
                     continue
                 image_bytes, _media_type = videos[0]
-                print(
-                    f"[ClawHarness] 🎬 Got video ({len(image_bytes):,} bytes, {_media_type})"
-                )
+                print(f"[ClawHarness] 🎬 Got video ({len(image_bytes):,} bytes, {_media_type})")
             else:
                 images = self._client.collect_images(history)
                 if not images:
@@ -691,6 +703,20 @@ class ClawHarness:
                 self.on_status(state, iteration, detail)
             except Exception:
                 pass
+
+    def _generation_timeout(self) -> int:
+        if self.config.generation_timeout > 0:
+            return self.config.generation_timeout
+        return 2400 if self.config.modality == "video" else 600
+
+    def _is_infra_error(self, history: dict) -> bool:
+        haystack = "\n".join(
+            [
+                str(history.get("error", "")),
+                "\n".join(str(line) for line in history.get("error_traceback", []) or []),
+            ]
+        )
+        return any(sig in haystack for sig in _INFRA_ERROR_SIGNALS)
 
     def _on_workflow_change(self, workflow: dict) -> None:
         if self._sync:

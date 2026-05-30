@@ -136,11 +136,25 @@ class ComfyClient:
             status = entry.get("status", {})
             if status.get("status_str") == "error":
                 err = "(unknown ComfyUI execution error)"
+                node_id = None
+                node_type = None
+                traceback_lines: list[str] = []
                 for kind, data in status.get("messages", []):
                     if kind == "execution_error":
                         err = data.get("exception_message", err)
+                        node_id = data.get("node_id")
+                        node_type = data.get("node_type")
+                        traceback_lines = list(data.get("traceback") or [])
                         break
-                return {"error": f"ComfyUI execution error: {err}"}
+                detail = f"ComfyUI execution error: {err}"
+                if node_id or node_type:
+                    detail = f"{detail} (node {node_id or '?'} {node_type or '?'})"
+                return {
+                    "error": detail,
+                    "error_node_id": node_id,
+                    "error_node_type": node_type,
+                    "error_traceback": traceback_lines,
+                }
 
             return entry
 

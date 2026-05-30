@@ -284,7 +284,8 @@ class VideoVerifier:
         text_block = {
             "type": "text",
             "text": (
-                f"{header}\n\n" + _DETAILED_ANALYSIS_PROMPT.format(prompt=prompt)
+                f"{header}\n\n"
+                + _DETAILED_ANALYSIS_PROMPT.format(prompt=prompt)
                 + "\n\nWhen describing region_issues, indicate WHICH frame(s) "
                 "the issue appears in (e.g. 'frames 3-5: hand morphs'). Include "
                 "temporal artefacts (flicker, identity drift, motion judder) "

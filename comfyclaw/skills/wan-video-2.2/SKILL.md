@@ -10,8 +10,8 @@ description: >-
 license: Apache-2.0
 metadata:
   author: davidliuk
-  version: "1.0.0"
-  base_arch: Wan2.2 DiT (T2V / I2V), 14B params with FP8 quantization
+  version: "1.1.0"
+  base_arch: Wan2.2 DiT (T2V / I2V), 14B high/low-noise experts with FP8 quantization
   defaults:
     frames: 16
     fps: 16
@@ -29,8 +29,9 @@ exist in ComfyUI; pick **one** based on what `query_available_models` reports.
 ## Decision rule
 
 1. Call `query_available_models` first.
-2. If the model list contains `wan2.2_t2v_*.safetensors` (or similar) loaded
-   through `UNETLoader`, use **Path A — native ComfyUI nodes** below.
+2. If the model list contains `wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors`
+   and `wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors` loaded through
+   `UNETLoader`, use **Path A — native ComfyUI nodes** below.
 3. If only `WanVideoModelLoader` / `WanVideoSampler` show up, use
    **Path B — kijai WanVideoWrapper**.
 4. Do not mix nodes from the two paths in the same graph.
@@ -39,17 +40,30 @@ exist in ComfyUI; pick **one** based on what `query_available_models` reports.
 
 ## Path A — native ComfyUI nodes (preferred)
 
+Required native model files:
+
+| File | ComfyUI directory | Query type |
+|---|---|---|
+| `wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors` | `models/diffusion_models/` | `unets` |
+| `wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors` | `models/diffusion_models/` | `unets` |
+| `umt5_xxl_fp8_e4m3fn_scaled.safetensors` | `models/text_encoders/` | `clip` |
+| `wan_2.1_vae.safetensors` | `models/vae/` | `vae` |
+
 Spine for text-to-video:
 
 ```
-UNETLoader (wan2.2_t2v_*.safetensors)
-    └→ MODEL ─────────────────────────────┐
-CLIPLoader (umt5_xxl, type="wan")          │
-    └→ CLIP → CLIPTextEncode (positive)    ↓
-                                       KSampler
+UNETLoader (wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors)
+    └→ MODEL → ModelSamplingSD3(shift=8.0) ──┐
+UNETLoader (wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors)
+    └→ MODEL → ModelSamplingSD3(shift=8.0) ──┐
+CLIPLoader (umt5_xxl, type="wan")            │
+    └→ CLIP → CLIPTextEncode (positive)      ↓
+                                        KSampler(high noise)
     └→ CLIP → CLIPTextEncode (negative) ↑    │
-VAELoader (wan_2.2_vae.safetensors)             │
-    └→ VAE                                      │
+                                             ↓
+                                        KSampler(low noise)
+VAELoader (wan_2.1_vae.safetensors)          │
+    └→ VAE                                   │
 EmptyHunyuanLatentVideo (W=832, H=480, length=16)│
     └→ LATENT ─────────────────────────────────→┘
                                           │
@@ -65,15 +79,19 @@ Key parameters:
 
 | Node | Param | Value |
 |---|---|---|
-| `UNETLoader` | weight_dtype | `fp8_e4m3fn` |
+| `UNETLoader` | weight_dtype | `default` for `*_fp8_scaled.safetensors`, or `fp8_e4m3fn` if the dropdown requires it |
+| `ModelSamplingSD3` | shift | `8.0` for 14B T2V |
 | `EmptyHunyuanLatentVideo` | length | 16 (≈ 1 s @ 16 fps). Bump to 24-33 for ~2 s. |
 | `EmptyHunyuanLatentVideo` | width × height | 832 × 480 (landscape) or 480 × 832 (portrait) |
 | `KSampler` | steps | 30 (quality) · 20 (fast) |
 | `KSampler` | cfg | 5.0 |
 | `KSampler` | sampler_name | `euler` |
 | `KSampler` | scheduler | `simple` |
+| first `KSampler` | model | high-noise model |
+| second `KSampler` | model | low-noise model |
 | `SaveAnimatedWEBP` | fps | 16 |
 | `SaveAnimatedWEBP` | quality | 90 |
+| `SaveAnimatedWEBP` | method | `default` |
 
 Use `SaveAnimatedWEBP` when available — it ships with ComfyUI core and needs
 no extras. `VHS_VideoCombine` produces mp4/webm but requires the
@@ -130,8 +148,8 @@ asks for a stylised look that conflicts with it.
 
 1. `length` on the latent matches the saver's expected frame count.
 2. `fps` is set on the saver (otherwise WEBP defaults to 25 and looks fast).
-3. VAE node is wired to BOTH `UNETLoader.MODEL` consumers and the
-   `VAEDecode` — Wan uses one VAE for both encode/decode.
+3. For 14B T2V, both high-noise and low-noise UNETs are present. Do not use
+   a single legacy `wan2.2_t2v_14B_fp8_e4m3fn.safetensors` filename.
 4. Resolution is divisible by 16 in both dimensions.
 5. CFG is **not** at the SDXL default of 7+ — Wan looks burnt above 6.0.
 

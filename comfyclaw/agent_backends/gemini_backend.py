@@ -60,7 +60,7 @@ class GeminiCLIBackend:
         # the plan default.  NB: ``-m`` must appear BEFORE ``-p``;
         # gemini's flag parser otherwise consumes the prompt as the
         # model value.
-        from ..chat_agent import _gemini_pick_model
+        from comfyclaw.chat_agent import _gemini_pick_model
 
         gemini_model = _gemini_pick_model(self.model)
         if gemini_model:

@@ -601,6 +601,14 @@ const PROVIDERS = {
       { value: "openai/gpt-5.4-nano", label: "GPT-5.4 nano" },
     ],
   },
+  local: {
+    label: "Local", emoji: "▣", color: "#89b4fa",
+    models: [
+      { value: "openai/Qwen/Qwen3.6-27B", label: "vLLM Qwen3.6 27B" },
+      { value: "openai/Qwen/Qwen3-32B", label: "vLLM Qwen3 32B" },
+      { value: "openai/Qwen/Qwen2.5-32B-Instruct", label: "vLLM Qwen2.5 32B" },
+    ],
+  },
   google: {
     label: "Google", emoji: "✦", color: "#4285f4",
     models: [
@@ -1293,6 +1301,7 @@ function _setPS(pKey, field, val) {
 function _isProviderUsable(key) {
   if (!key) return false;
   if (key === "ollama") return true;
+  if (key === "local") return !!_getPS("local", "baseUrl");
   if (key === "custom") return _hasCustomTabModels();
   if (_getPS(key, "apiKey")) return true;
   if (_serverProvKeys.providers?.[key]) return true;
@@ -1325,8 +1334,9 @@ function _refreshProvDots() {
     const usable = _isProviderUsable(key);
     const clientKey = !!_getPS(key, "apiKey");
     const serverKey = !!_serverProvKeys.providers?.[key];
+    const localEndpoint = key === "local" && !!_getPS(key, "baseUrl");
     const viaWildcard =
-      !clientKey && !serverKey && (_serverProvKeys.wildcards || []).length > 0;
+      !clientKey && !serverKey && !localEndpoint && (_serverProvKeys.wildcards || []).length > 0;
 
     // Disable + dim non-usable buttons.  The user can still click them — we
     // intercept the click in _setActiveProvider and bounce them to
@@ -1339,6 +1349,8 @@ function _refreshProvDots() {
     // debugging "I added my key, why isn't it green yet?" confusion.
     if (!usable) {
       btn.title = `${PROVIDERS[key]?.label || key}: no API key — add one in Settings → Providers`;
+    } else if (localEndpoint) {
+      btn.title = `${PROVIDERS[key]?.label || key}: local OpenAI-compatible endpoint configured`;
     } else if (clientKey) {
       btn.title = `${PROVIDERS[key]?.label || key}: key configured in panel`;
     } else if (serverKey) {
@@ -1359,8 +1371,8 @@ function _refreshProvDots() {
         dot.style.cssText = "width:5px;height:5px;border-radius:50%;flex-shrink:0;";
         btn.appendChild(dot);
       }
-      dot.style.background = viaWildcard ? "#74c7ec" : "#a6e3a1";
-      dot.title = viaWildcard ? "Available via wildcard provider" : "Key configured";
+      dot.style.background = localEndpoint ? "#89b4fa" : (viaWildcard ? "#74c7ec" : "#a6e3a1");
+      dot.title = localEndpoint ? "Local endpoint configured" : (viaWildcard ? "Available via wildcard provider" : "Key configured");
     } else if (dot) {
       dot.remove();
     }
@@ -1423,6 +1435,12 @@ function createSettingsModal() {
                      border-bottom:2px solid transparent; transition:all 0.15s;">
         🤖 Agents
       </button>
+      <button class="cc-stab" data-tab="setup"
+              style="padding:10px 16px; border:none; background:transparent;
+                     cursor:pointer; font-size:12px; font-weight:600;
+                     border-bottom:2px solid transparent; transition:all 0.15s;">
+        ▣ Setup
+      </button>
       <button class="cc-stab" data-tab="providers"
               style="padding:10px 16px; border:none; background:transparent;
                      cursor:pointer; font-size:12px; font-weight:600;
@@ -1482,6 +1500,7 @@ function createSettingsModal() {
     });
     const content = box.querySelector("#cc-stg-content");
     if (tab === "agents") _renderAgentsTab(content);
+    else if (tab === "setup") _renderSetupTab(content);
     else if (tab === "providers") _renderProvidersTab(content);
     else if (tab === "connection") _renderConnectionTab(content);
     else if (tab === "appearance") _renderAppearanceTab(content);
@@ -1665,6 +1684,175 @@ function createSettingsModal() {
     });
   }
 
+  // ── Setup tab ───────────────────────────────────────────────────────────────
+  function _renderSetupTab(container) {
+    const localModel = _getPS("local", "model") || localStorage.getItem("comfyclaw_local_model") || "openai/Qwen/Qwen3.6-27B";
+    const localBase = _getPS("local", "baseUrl") || localStorage.getItem("comfyclaw_local_api_base") || "http://127.0.0.1:18000/v1";
+    const bundle = localStorage.getItem("comfyclaw_setup_bundle") || "wan22-t2v";
+    container.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <section style="background:#313244;border:1px solid #45475a;border-radius:12px;padding:14px 16px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
+            <div>
+              <div style="font-size:13px;font-weight:800;color:#cdd6f4;">Local LLM</div>
+              <div style="font-size:11px;color:#a6adc8;line-height:1.45;margin-top:2px;">
+                OpenAI-compatible endpoint, for vLLM / llama.cpp / LM Studio.
+              </div>
+            </div>
+            <button id="cc-setup-apply-llm" class="cc-btn cc-btn-info"
+                    style="padding:7px 11px;font-size:11px;flex-shrink:0;">
+              Use in panel
+            </button>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <div>
+              <label style="${_settingsLabelStyle()}">Model</label>
+              <input id="cc-setup-llm-model" type="text" value="${escAttr(localModel)}"
+                     style="${_settingsInputStyle("font-family:monospace;")}">
+            </div>
+            <div>
+              <label style="${_settingsLabelStyle()}">API Base</label>
+              <input id="cc-setup-llm-base" type="url" value="${escAttr(localBase)}"
+                     style="${_settingsInputStyle("font-family:monospace;")}">
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <button id="cc-setup-check-llm" class="cc-btn cc-btn-secondary"
+                      style="padding:7px 11px;font-size:11px;">Check endpoint</button>
+              <span id="cc-setup-llm-status" style="font-size:11px;color:#7f849c;"></span>
+            </div>
+          </div>
+        </section>
+
+        <section style="background:#313244;border:1px solid #45475a;border-radius:12px;padding:14px 16px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
+            <div>
+              <div style="font-size:13px;font-weight:800;color:#cdd6f4;">Generation Models</div>
+              <div style="font-size:11px;color:#a6adc8;line-height:1.45;margin-top:2px;">
+                Check or download ComfyUI weights for image and video workflows.
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <div>
+              <label style="${_settingsLabelStyle()}">Bundle</label>
+              <select id="cc-setup-bundle" style="${_settingsInputStyle("cursor:pointer;")}">
+                <option value="wan22-t2v" ${bundle === "wan22-t2v" ? "selected" : ""}>Wan2.2 text-to-video</option>
+                <option value="qwen-image-2512" ${bundle === "qwen-image-2512" ? "selected" : ""}>Qwen-Image-2512 text-to-image</option>
+              </select>
+            </div>
+            <label style="display:flex;align-items:center;gap:7px;font-size:11px;color:#a6adc8;cursor:pointer;">
+              <input id="cc-setup-optional" type="checkbox" style="margin:0;accent-color:#cba6f7;">
+              Include optional files
+            </label>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <button id="cc-setup-check-models" class="cc-btn cc-btn-secondary"
+                      style="padding:7px 11px;font-size:11px;">Check installed</button>
+              <button id="cc-setup-download-models" class="cc-btn cc-btn-warn"
+                      style="padding:7px 11px;font-size:11px;">Download missing</button>
+              <span id="cc-setup-models-status" style="font-size:11px;color:#7f849c;"></span>
+            </div>
+            <div id="cc-setup-models-list"
+                 style="display:flex;flex-direction:column;gap:5px;margin-top:2px;"></div>
+          </div>
+        </section>
+
+        <section style="background:#1e1e2e;border:1px solid #45475a;border-radius:10px;padding:12px 14px;">
+          <div style="font-size:12px;font-weight:700;color:#cdd6f4;margin-bottom:6px;">Video preset</div>
+          <div style="font-size:11px;color:#a6adc8;line-height:1.5;">
+            For Wan2.2 runs, use Video + Manual first. After model files download, restart ComfyUI so loader dropdowns refresh, then reconnect this panel.
+          </div>
+          <button id="cc-setup-video-preset" class="cc-btn cc-btn-secondary"
+                  style="padding:7px 11px;font-size:11px;margin-top:10px;">
+            Set Video + Manual
+          </button>
+        </section>
+      </div>
+    `;
+
+    const wsReady = () => _activeSyncClient?.ws?.readyState === WebSocket.OPEN;
+    const sendOrWarn = (payload) => {
+      if (!wsReady()) {
+        showToast("ComfyClaw server is not connected. Start `comfyclaw serve-video` and reconnect.", "warning", 5500);
+        return false;
+      }
+      _activeSyncClient.ws.send(JSON.stringify(payload));
+      return true;
+    };
+    const modelEl = container.querySelector("#cc-setup-llm-model");
+    const baseEl = container.querySelector("#cc-setup-llm-base");
+    const bundleEl = container.querySelector("#cc-setup-bundle");
+    const optionalEl = container.querySelector("#cc-setup-optional");
+    const llmStatus = container.querySelector("#cc-setup-llm-status");
+    const modelStatus = container.querySelector("#cc-setup-models-status");
+
+    const persistLocal = () => {
+      const model = modelEl.value.trim();
+      const base = baseEl.value.trim();
+      localStorage.setItem("comfyclaw_local_model", model);
+      localStorage.setItem("comfyclaw_local_api_base", base);
+      _setPS("local", "model", model);
+      _setPS("local", "apiKey", "local-vllm");
+      _setPS("local", "baseUrl", base);
+    };
+    [modelEl, baseEl].forEach((el) => {
+      el?.addEventListener("change", persistLocal);
+      el?.addEventListener("focus", () => { el.style.borderColor = "#cba6f7"; });
+      el?.addEventListener("blur", () => { el.style.borderColor = "#45475a"; });
+    });
+    bundleEl?.addEventListener("change", () => {
+      localStorage.setItem("comfyclaw_setup_bundle", bundleEl.value);
+      container.querySelector("#cc-setup-models-list").innerHTML = "";
+      modelStatus.textContent = "";
+    });
+
+    container.querySelector("#cc-setup-apply-llm")?.addEventListener("click", () => {
+      persistLocal();
+      const model = modelEl.value.trim();
+      _setActiveProvider("local", false);
+      const select = document.getElementById("comfyclaw-gen-model");
+      if (select) {
+        if (!select.querySelector(`[value="${CSS.escape(model)}"]`)) {
+          _addCustomModel(model, model.replace(/^openai\//, ""), "local");
+          _setActiveProvider("local", false);
+        }
+        select.value = model;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      _captureCurrentSession();
+      showToast("Local LLM selected for this panel.", "success", 2200);
+    });
+
+    container.querySelector("#cc-setup-check-llm")?.addEventListener("click", () => {
+      persistLocal();
+      llmStatus.textContent = "Checking…";
+      sendOrWarn({
+        type: "local_llm_check",
+        model: modelEl.value.trim(),
+        api_base: baseEl.value.trim(),
+      });
+    });
+
+    container.querySelector("#cc-setup-check-models")?.addEventListener("click", () => {
+      modelStatus.textContent = "Checking…";
+      sendOrWarn({ type: "model_bundle_check", bundle: bundleEl.value });
+    });
+    container.querySelector("#cc-setup-download-models")?.addEventListener("click", () => {
+      modelStatus.textContent = "Starting download…";
+      sendOrWarn({
+        type: "model_bundle_download",
+        bundle: bundleEl.value,
+        include_optional: !!optionalEl.checked,
+      });
+    });
+    container.querySelector("#cc-setup-video-preset")?.addEventListener("click", () => {
+      localStorage.setItem("comfyclaw_modality", "video");
+      localStorage.setItem("comfyclaw_run_mode", "manual");
+      _modalityToggleRef?.set("video");
+      _modeToggleRef?.set("manual");
+      showToast("Video + Manual preset applied.", "success", 1800);
+    });
+  }
+
   // ── Providers tab ────────────────────────────────────────────────────────────
   function _renderProvidersTab(container) {
     // The "custom" provider is a virtual tab — it has no API key form, just
@@ -1677,14 +1865,18 @@ function createSettingsModal() {
       const hasKey = !!_getPS(key, "apiKey");
       const onServer = !!_serverProvKeys.providers?.[key];
       const wildcards = _serverProvKeys.wildcards || [];
-      const usable = hasKey || onServer || key === "ollama" || wildcards.length > 0;
+      const isLocal = key === "local";
+      const usable = hasKey || onServer || key === "ollama" || (isLocal && !!_getPS(key, "baseUrl")) || wildcards.length > 0;
 
       // Build a status line that matches what the LiteLLM provider bar is
       // actually doing.  Same priority order as _isProviderUsable.
       let dotColor = "#45475a";
       let label = "Not configured";
       let labelClr = "#585b70";
-      if (hasKey) {
+      if (isLocal && !!_getPS(key, "baseUrl")) {
+        dotColor = "#89b4fa"; labelClr = "#89b4fa";
+        label = "OpenAI-compatible endpoint configured";
+      } else if (hasKey) {
         dotColor = "#a6e3a1"; labelClr = "#a6e3a1";
         label = "Key configured in panel";
       } else if (onServer) {
@@ -1712,10 +1904,10 @@ function createSettingsModal() {
             <span style="font-size:11px; color:${labelClr};">${label}</span>
           </div>
           <div style="margin-bottom:10px;">
-            <label style="${_settingsLabelStyle()}">API Key</label>
+            <label style="${_settingsLabelStyle()}">${isLocal ? "API Key (optional)" : "API Key"}</label>
             <div style="display:flex;gap:6px;">
               <input class="cc-ps-inp" data-pkey="${key}" data-field="apiKey" type="password"
-                     value="${apiKey}" placeholder="Blank = use server env var (recommended)"
+                     value="${apiKey}" placeholder="${isLocal ? "local-vllm is fine for most local servers" : "Blank = use server env var (recommended)"}"
                      style="${_settingsInputStyle("flex:1;font-family:monospace;")}">
               <button class="cc-eye" data-pkey="${key}"
                       style="padding:7px 11px;background:#45475a;border:none;
@@ -1859,6 +2051,9 @@ function createSettingsModal() {
       const hasKey = !!_getPS(pkey, "apiKey");
       const onServer = !!_serverProvKeys.providers?.[pkey];
       const wcs = _serverProvKeys.wildcards || [];
+      if (pkey === "local" && !!_getPS(pkey, "baseUrl")) {
+        return { dot: "#89b4fa", clr: "#89b4fa", text: "OpenAI-compatible endpoint configured" };
+      }
       if (hasKey) return { dot: "#a6e3a1", clr: "#a6e3a1", text: "Key configured in panel" };
       if (onServer) return { dot: "#a6e3a1", clr: "#a6e3a1", text: "Key found in server env" };
       if (pkey === "ollama") return { dot: "#a6e3a1", clr: "#a6e3a1", text: "Local — no key required" };
@@ -5355,6 +5550,56 @@ class SyncClient {
         const fallback = Object.keys(PROVIDERS).find(_isProviderUsable);
         if (fallback) _setActiveProvider(fallback, false);
       }
+
+    } else if (msg.type === "local_llm_status") {
+      const el = document.getElementById("cc-setup-llm-status");
+      if (el) {
+        el.style.color = msg.ok ? "#a6e3a1" : "#f38ba8";
+        const listed = msg.models?.length ? ` · ${msg.models.slice(0, 3).join(", ")}` : "";
+        el.textContent = (msg.ok ? "OK: " : "Failed: ") + (msg.detail || "") + listed;
+      }
+      showToast(msg.ok ? "Local LLM endpoint is ready." : "Local LLM check failed.", msg.ok ? "success" : "warning", 3500);
+
+    } else if (msg.type === "model_bundle_status") {
+      const statusEl = document.getElementById("cc-setup-models-status");
+      const listEl = document.getElementById("cc-setup-models-list");
+      if (statusEl) {
+        statusEl.style.color = msg.ok ? "#a6e3a1" : "#f9e2af";
+        statusEl.textContent = msg.ok ? "Required files installed." : (msg.error || "Required files missing.");
+      }
+      if (listEl && Array.isArray(msg.files)) {
+        listEl.innerHTML = msg.files.map((f) => {
+          const color = f.exists ? "#a6e3a1" : (f.optional ? "#7f849c" : "#f9e2af");
+          const state = f.exists ? "OK" : (f.optional ? "optional missing" : "missing");
+          return `
+            <div style="display:flex;gap:8px;align-items:flex-start;padding:7px 9px;
+                        background:#1e1e2e;border:1px solid #45475a;border-radius:8px;">
+              <span style="font-size:10px;font-weight:800;color:${color};min-width:78px;">${escHtml(state)}</span>
+              <div style="min-width:0;flex:1;">
+                <div style="font-size:11px;color:#cdd6f4;font-family:ui-monospace,Menlo,Consolas,monospace;
+                            overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                     title="${escAttr(f.target || "")}">${escHtml(f.name || "")}</div>
+                ${f.exists ? "" : `<div style="font-size:10px;color:#7f849c;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                     title="hf://${escAttr(f.repo || "")}/${escAttr(f.path || "")}">hf://${escHtml(f.repo || "")}/${escHtml(f.path || "")}</div>`}
+              </div>
+            </div>`;
+        }).join("");
+      }
+
+    } else if (msg.type === "model_bundle_download_progress") {
+      const statusEl = document.getElementById("cc-setup-models-status");
+      if (statusEl) {
+        statusEl.style.color = "#89b4fa";
+        statusEl.textContent = `Downloading ${msg.index}/${msg.total}: ${msg.file}`;
+      }
+
+    } else if (msg.type === "model_bundle_download_complete") {
+      const statusEl = document.getElementById("cc-setup-models-status");
+      if (statusEl) {
+        statusEl.style.color = msg.success ? "#a6e3a1" : "#f38ba8";
+        statusEl.textContent = msg.success ? (msg.detail || "Download complete.") : (msg.error || "Download failed.");
+      }
+      showToast(msg.success ? "Model download complete." : "Model download failed.", msg.success ? "success" : "warning", 4500);
 
       // ── Backend setup flows: install + OAuth ─────────────────────────────────
     } else if (msg.type === "backend_install_progress") {

@@ -281,6 +281,34 @@ COMFYUI_DIR=~/Documents/ComfyUI
 All CLI flags can also be set as environment variables. `.env` is auto-loaded
 at startup.
 
+**Local LLM / local model helper commands.** If you run the agent through a
+local vLLM or need ComfyUI image/video weights, ComfyClaw includes setup
+helpers:
+
+```bash
+# Write/check local vLLM settings in .env
+uv run comfyclaw configure-local-llm \
+  --provider vllm \
+  --model Qwen/Qwen3.6-27B \
+  --api-base http://127.0.0.1:18000/v1 \
+  --run-mode manual \
+  --check \
+  --write-env
+
+# Download known ComfyUI model bundles
+uv run comfyclaw models list
+uv run comfyclaw models download wan22-t2v
+uv run comfyclaw models download qwen-image-2512 --include-optional
+```
+
+See [`docs/LOCAL_LLM_AND_MODELS.md`](docs/LOCAL_LLM_AND_MODELS.md) for the
+full local vLLM, Wan2.2 video, and Qwen-Image setup guide.
+
+The ComfyUI plugin also exposes the same setup flow in **Settings → Setup**:
+configure a local OpenAI-compatible LLM, check or download known ComfyUI model
+bundles, and apply the recommended **Video + Manual** preset for first-run
+Wan2.2 jobs.
+
 ### Step 3 — Install the ComfyUI plugin
 
 The plugin is bundled inside the package. Install it once, then **restart

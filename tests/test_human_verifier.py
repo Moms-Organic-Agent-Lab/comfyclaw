@@ -70,14 +70,14 @@ class TestSniffExtension:
     def test_gif(self) -> None:
         assert _sniff_extension(b"GIF89a") == ".gif"
 
-    def test_video_round_trip_uses_correct_extension(
-        self, mock_sync, tmp_path
-    ) -> None:
+    def test_video_round_trip_uses_correct_extension(self, mock_sync, tmp_path) -> None:
         """A video blob handed to HumanVerifier must land on disk as a video
         file, not as a corrupted .png."""
         mp4 = b"\x00\x00\x00\x20ftypmp42" + b"\x00" * 64
         mock_sync.wait_for_human_feedback.return_value = {
-            "text": "ok", "score": 0.8, "action": "accept",
+            "text": "ok",
+            "score": 0.8,
+            "action": "accept",
         }
         verifier = HumanVerifier(sync_server=mock_sync, output_dir=str(tmp_path))
         verifier.verify(mp4, "a fox", iteration=1)
