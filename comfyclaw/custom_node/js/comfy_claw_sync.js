@@ -1319,6 +1319,25 @@ function _activeProvPayload() {
   };
 }
 
+function _providerForModelId(modelId) {
+  const m = String(modelId || "").trim().toLowerCase();
+  if (!m) return null;
+  if (m.startsWith("openai/") || m.startsWith("gpt-")) return "openai";
+  if (m.startsWith("anthropic/") || m.startsWith("claude-")) return "anthropic";
+  if (m.startsWith("gemini/") || m.startsWith("gemini-")) return "google";
+  if (m.startsWith("ollama/")) return "ollama";
+  return null;
+}
+
+function _syncProviderToSelectedModel() {
+  const modelEl = document.getElementById("comfyclaw-gen-model");
+  const stateEl = document.getElementById("comfyclaw-provider-state");
+  const target = _providerForModelId(modelEl?.value || "");
+  const current = stateEl?.dataset?.provider || "";
+  if (!target || !PROVIDERS[target] || target === current) return;
+  _setActiveProvider(target, false);
+}
+
 function _refreshProvDots() {
   document.querySelectorAll(".cc-provider-btn").forEach(btn => {
     const key = btn.dataset.key;
@@ -3084,6 +3103,7 @@ function createComfyClawPanel() {
     const mEl = panel.querySelector("#comfyclaw-gen-model");
     if (mEl && mEl.querySelector(`[value="${initSess.model}"]`)) mEl.value = initSess.model;
   }
+  _syncProviderToSelectedModel();
   if (initSess.prompt) {
     const pEl = panel.querySelector("#comfyclaw-gen-prompt");
     if (pEl) pEl.value = initSess.prompt;
@@ -3846,7 +3866,10 @@ function createComfyClawPanel() {
     if (_modelPopover?.dataset?.open === "1") _modelPopover.dataset.open = "0";
     else _openModelPopover();
   });
-  modelSelectEl?.addEventListener("change", _refreshModelChip);
+  modelSelectEl?.addEventListener("change", () => {
+    _syncProviderToSelectedModel();
+    _refreshModelChip();
+  });
   _refreshModelChip();
   // Refresh after provider changes too (provider buttons swap the dropdown).
   panel.querySelectorAll(".cc-provider-btn").forEach((b) =>
