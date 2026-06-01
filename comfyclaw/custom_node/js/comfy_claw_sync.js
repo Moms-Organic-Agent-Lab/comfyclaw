@@ -3915,6 +3915,10 @@ function createComfyClawPanel() {
     }
     if (_backendPickerRef?.set) _backendPickerRef.set(target);
     else localStorage.setItem("comfyclaw_agent_backend", target);
+    // Keep a canonical persisted backend id in sync even when the hidden
+    // legacy picker is present, so every message path (chat/generate/debug)
+    // reads the same backend after an API/CLI toggle.
+    localStorage.setItem("comfyclaw_agent_backend", target);
     if (target !== "litellm") localStorage.setItem(_LAST_CLI_BACKEND_KEY, target);
     localStorage.setItem(_ACCESS_MODE_KEY, mode === "api" ? "api" : "cli");
     _refreshBackendChip();
@@ -4871,6 +4875,16 @@ function createComfyClawPanel() {
       _setAccessChip(_effectiveAccessMode());
     }
   }, 1200);
+
+  // Hard guardrail: if user explicitly pinned API mode, force backend to
+  // LiteLLM even if stale localStorage or delayed picker hydration tries to
+  // resurrect a CLI backend (e.g. Codex).
+  setTimeout(() => {
+    const preferred = localStorage.getItem(_ACCESS_MODE_KEY);
+    if (preferred === "api" && _activeBackendId() !== "litellm") {
+      _setBackendByAccessMode("api");
+    }
+  }, 1800);
 
   // ── Expose agent state to the (module-scope) Settings modal ───────────────
   // The Settings "Agents" tab lives in createSettingsModal() (module scope)
