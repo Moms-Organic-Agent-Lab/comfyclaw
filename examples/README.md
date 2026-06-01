@@ -37,10 +37,10 @@ The harness can also be used **without** a workflow file — pass `{}` to
 
 ```bash
 # From-scratch (no workflow file)
-comfyclaw run --prompt "a red fox at dawn, photorealistic"
+uv run comfyclaw run --prompt "a red fox at dawn, photorealistic"
 
 # Start from one of the examples here
-comfyclaw run \
+uv run comfyclaw run \
   --workflow examples/workflows/qwen_image_2512.json \
   --prompt "A majestic red fox sitting in a misty ancient forest at dawn"
 ```
@@ -57,13 +57,13 @@ installed and connected:
 ```bash
 # 1. Make sure ComfyUI is running (browser tab open).
 # 2. Make sure the ComfyClaw-Sync extension is installed:
-comfyclaw install-node
+uv run comfyclaw install-node
 
 # 3. Run the demo (default: WebSocket port 8765, 1.5 s between nodes):
-python examples/demo_incremental.py
+uv run python examples/demo_incremental.py
 
 # Slow it down to watch each step clearly:
-python examples/demo_incremental.py --delay 2.5
+uv run python examples/demo_incremental.py --delay 2.5
 ```
 
 The demo does not call any LLM — it's a pure WebSocket demo of the
