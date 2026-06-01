@@ -203,3 +203,41 @@ class TestClaudeModelNormalisation:
         )
 
         assert _normalise_claude_model(raw) == expected
+
+
+# ---------------------------------------------------------------------------
+# Codex model name normalisation
+# ---------------------------------------------------------------------------
+
+
+class TestCodexModelNormalisation:
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [
+            ("", "gpt-5.5"),
+            ("   ", "gpt-5.5"),
+            ("gpt-5.5", "gpt-5.5"),
+            ("openai/gpt-5.5", "gpt-5.5"),
+            ("gpt-5.4", "gpt-5.4"),
+            ("gpt-5.4-mini", "gpt-5.4-mini"),
+            ("gpt-5.3-codex", "gpt-5.3-codex"),
+            ("gpt-5", "gpt-5.5"),
+            ("gpt-5-codex", "gpt-5.5"),
+            ("gpt-5.6", "gpt-5.6"),
+            ("o3-mini", "o3-mini"),
+            ("o3-pro", "o3"),
+            ("o4", "o4-mini"),
+            ("foo/bar", "gpt-5.5"),
+        ],
+    )
+    def test_pick_model(self, raw: str, expected: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        from comfyclaw.chat_agent import _codex_pick_model
+
+        monkeypatch.delenv("COMFYCLAW_CODEX_MODEL", raising=False)
+        assert _codex_pick_model(raw) == expected
+
+    def test_env_override_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from comfyclaw.chat_agent import _codex_pick_model
+
+        monkeypatch.setenv("COMFYCLAW_CODEX_MODEL", "custom-codex-model")
+        assert _codex_pick_model("gpt-5.5") == "custom-codex-model"

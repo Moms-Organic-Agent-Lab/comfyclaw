@@ -662,7 +662,7 @@ const CLI_MODELS = {
     label: "Codex",
     color: "#10a37f",
     models: [
-      { value: "", label: "CLI default" },
+      { value: "", label: "CLI default (GPT-5.5)" },
       { value: "gpt-5.5", label: "GPT-5.5" },
       { value: "gpt-5.4", label: "GPT-5.4" },
       { value: "gpt-5.4-mini", label: "GPT-5.4 mini" },
@@ -682,7 +682,7 @@ const CLI_MODELS = {
 };
 
 // LocalStorage key holding the per-CLI-backend last-selected model.
-// Shape: { "claude-code": "sonnet", "codex": "gpt-5-codex", … }
+// Shape: { "claude-code": "sonnet", "codex": "gpt-5.5", … }
 const _CLI_MODEL_KEY = "comfyclaw_cli_model_by_backend_v1";
 
 function _loadCliModelMap() {
@@ -706,11 +706,24 @@ function _isCliBackend(id) {
   return id === "claude-code" || id === "codex" || id === "gemini-cli";
 }
 
+function _normaliseCliModel(backendId, value) {
+  const raw = (value || "").trim();
+  const suffix = raw.split("/").pop() || raw;
+  if (backendId === "codex" && (suffix === "gpt-5" || suffix === "gpt-5-codex")) {
+    return "gpt-5.5";
+  }
+  return raw;
+}
+
 /** Return the currently selected model id for a CLI backend (may be ""). */
 function _cliModelFor(backendId) {
   if (!_isCliBackend(backendId)) return "";
   const saved = _cliModelByBackend[backendId];
-  if (saved != null) return saved;
+  if (saved != null) {
+    const normalised = _normaliseCliModel(backendId, saved);
+    if (normalised !== saved) _setCliModelFor(backendId, normalised);
+    return normalised;
+  }
   // Default to the first entry in the CLI's list.
   const list = CLI_MODELS[backendId]?.models || [];
   return list[0]?.value ?? "";
@@ -719,7 +732,7 @@ function _cliModelFor(backendId) {
 /** Persist a per-CLI-backend model choice. */
 function _setCliModelFor(backendId, value) {
   if (!_isCliBackend(backendId)) return;
-  _cliModelByBackend[backendId] = value || "";
+  _cliModelByBackend[backendId] = _normaliseCliModel(backendId, value);
   _saveCliModelMap();
 }
 
@@ -2940,12 +2953,6 @@ function createComfyClawPanel() {
             <span id="cc-composer-timer" class="cc-pill cc-pill-mono" style="display:none;">0:00</span>
           </div>
           <div class="cc-composer-toolbar">
-            <button id="cc-composer-access-chip" class="cc-composer-chip"
-                    title="Choose access mode: CLI (subscription login) or API (provider key)">
-              <span class="cc-chip-icon">🔀</span>
-              <span class="cc-chip-label">CLI</span>
-              <span class="cc-chip-chev">▾</span>
-            </button>
             <button id="cc-composer-backend-chip" class="cc-composer-chip"
                     title="Click to change agent backend">
               <span class="cc-chip-icon">⚙</span>
@@ -3876,8 +3883,6 @@ function createComfyClawPanel() {
     b.addEventListener("click", () => setTimeout(_refreshModelChip, 0)));
 
   // ── Composer backend chip + popover (LiteLLM / Claude Code / Codex / …) ───
-  const accessChip = panel.querySelector("#cc-composer-access-chip");
-  const accessChipLabel = accessChip?.querySelector(".cc-chip-label");
   const beChip = panel.querySelector("#cc-composer-backend-chip");
   const beChipLabel = beChip?.querySelector(".cc-chip-label");
   const beChipIcon = beChip?.querySelector(".cc-chip-icon");
@@ -3892,10 +3897,6 @@ function createComfyClawPanel() {
     "codex": { label: "Codex", letter: "O", brand: "#10a37f", needsApiKey: false },
     "gemini-cli": { label: "Gemini CLI", letter: "G", brand: "#4285f4", needsApiKey: false },
   };
-
-  const _CLI_BACKENDS = ["claude-code", "codex", "gemini-cli"];
-  const _ACCESS_MODE_KEY = "comfyclaw_access_mode"; // "cli" | "api"
-  const _LAST_CLI_BACKEND_KEY = "comfyclaw_last_cli_backend";
 
   /** Render the brand-coloured logo chip for a backend. */
   function _backendLogoHtml(meta, size = 16) {
@@ -3912,40 +3913,6 @@ function createComfyClawPanel() {
     return _backendPickerRef?.value() || localStorage.getItem("comfyclaw_agent_backend") || "litellm";
   }
 
-  function _setAccessChip(mode) {
-    if (!accessChipLabel) return;
-    const m = mode === "api" ? "API" : "CLI";
-    accessChipLabel.textContent = m;
-    accessChip.title = m === "API"
-      ? "API mode: uses provider keys (LiteLLM)"
-      : "CLI mode: uses local CLI login (no provider API key)";
-  }
-
-  function _effectiveAccessMode() {
-    return _activeBackendId() === "litellm" ? "api" : "cli";
-  }
-
-  function _setBackendByAccessMode(mode) {
-    const target = mode === "api"
-      ? "litellm"
-      : (localStorage.getItem(_LAST_CLI_BACKEND_KEY) || "claude-code");
-    const st = _backendPickerRef?.status?.(target) || null;
-    if (mode === "cli" && st && st.state && st.state !== "ok") {
-      if (!_settingsModal) _settingsModal = createSettingsModal();
-      _settingsModal.openTo("agents");
-      showToast("CLI backend is not ready. Sign in first in Agents.", "warning", 2600);
-      return;
-    }
-    if (_backendPickerRef?.set) _backendPickerRef.set(target);
-    else localStorage.setItem("comfyclaw_agent_backend", target);
-    // Keep a canonical persisted backend id in sync even when the hidden
-    // legacy picker is present, so every message path (chat/generate/debug)
-    // reads the same backend after an API/CLI toggle.
-    localStorage.setItem("comfyclaw_agent_backend", target);
-    if (target !== "litellm") localStorage.setItem(_LAST_CLI_BACKEND_KEY, target);
-    localStorage.setItem(_ACCESS_MODE_KEY, mode === "api" ? "api" : "cli");
-    _refreshBackendChip();
-  }
   function _refreshBackendChip() {
     if (!beChip) return;
     const id = _activeBackendId();
@@ -3966,9 +3933,6 @@ function createComfyClawPanel() {
     if (modelChipEl) modelChipEl.style.display = "";
     // Refresh the chip text + dot colour for the new backend.
     _refreshModelChip?.();
-    const mode = _effectiveAccessMode();
-    _setAccessChip(mode);
-    if (id !== "litellm") localStorage.setItem(_LAST_CLI_BACKEND_KEY, id);
   }
 
   let _bePopover = null;
@@ -4874,11 +4838,6 @@ function createComfyClawPanel() {
     else _openBackendPopover();
   });
 
-  accessChip?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const cur = _effectiveAccessMode();
-    _setBackendByAccessMode(cur === "api" ? "cli" : "api");
-  });
   // Custom event so the legacy picker (or any other code path) can poke us.
   beChip?.addEventListener("cc-backend-refresh", () => {
     _refreshBackendChip();
@@ -4889,25 +4848,6 @@ function createComfyClawPanel() {
   // backend availability via WS, which can demote the saved backend to litellm).
   setTimeout(_refreshBackendChip, 0);
   setTimeout(_refreshBackendChip, 1000);
-  // Apply a persisted preference once the picker has initial availability.
-  setTimeout(() => {
-    const preferred = localStorage.getItem(_ACCESS_MODE_KEY);
-    if (preferred === "api" || preferred === "cli") {
-      _setBackendByAccessMode(preferred);
-    } else {
-      _setAccessChip(_effectiveAccessMode());
-    }
-  }, 1200);
-
-  // Hard guardrail: if user explicitly pinned API mode, force backend to
-  // LiteLLM even if stale localStorage or delayed picker hydration tries to
-  // resurrect a CLI backend (e.g. Codex).
-  setTimeout(() => {
-    const preferred = localStorage.getItem(_ACCESS_MODE_KEY);
-    if (preferred === "api" && _activeBackendId() !== "litellm") {
-      _setBackendByAccessMode("api");
-    }
-  }, 1800);
 
   // ── Expose agent state to the (module-scope) Settings modal ───────────────
   // The Settings "Agents" tab lives in createSettingsModal() (module scope)

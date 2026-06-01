@@ -246,18 +246,17 @@ def _claude_cli_model(model: str) -> str:
     return ""
 
 
-# Codex CLI model ids that ship with a ChatGPT subscription.  Used to
-# whitelist whatever the user picked in the UI dropdown before we hand
-# it to codex — if they (or their saved session) pinned a LiteLLM model
-# like ``openai/gpt-5.5``, we strip the prefix and only forward it when
-# the suffix looks like something codex can actually accept.
+# Codex CLI model ids that can be forwarded as-is for ChatGPT-account
+# auth.  Keep this list close to the CLI's own model picker, not the
+# Responses API model page.
+_CODEX_DEFAULT_MODEL = "gpt-5.5"
 _CODEX_KNOWN_MODELS = {
-    "gpt-5",
-    "gpt-5-codex",
-    "gpt-5-mini",
-    "gpt-5-nano",
-    "gpt-4.1",
-    "gpt-4.1-mini",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.4-nano",
+    "gpt-5.3-codex",
+    "gpt-5.3-codex-spark",
     "o3",
     "o3-mini",
     "o4-mini",
@@ -271,10 +270,10 @@ def _codex_pick_model(model: str) -> str:
         1. Explicit ``COMFYCLAW_CODEX_MODEL`` env-var override
            (operator escape hatch).
         2. The ``model`` arg, with any LiteLLM provider prefix
-           (``openai/``, ``azure/openai/``, …) stripped, if the bare
-           suffix matches a known codex-compatible model id.
-        3. ``gpt-5-codex`` (recommended for codex CLI usage; works on
-           Plus/Pro/Team plans).
+           (``openai/``, ``azure/openai/``, …) stripped when it names a
+           Codex CLI model.
+        3. ``gpt-5.5`` (recommended by the Codex CLI docs for most
+           Codex tasks).
 
     Returning a single string lets ``_codex_chat_stream`` and
     ``CodexBackend.run_tool_loop`` share the same logic.
@@ -287,16 +286,21 @@ def _codex_pick_model(model: str) -> str:
         suffix = raw.rsplit("/", 1)[-1]  # strip any provider prefix
         if suffix in _CODEX_KNOWN_MODELS:
             return suffix
-        # Tolerate slightly off-script names by matching well-known
-        # families — keeps codex from rejecting "gpt-5o" etc. with a
-        # less informative error than ours.
-        if suffix.startswith("gpt-5"):
-            return "gpt-5"
+        # Plain ``gpt-5`` is not a valid ChatGPT-account Codex CLI model
+        # id.  ``gpt-5-codex`` is a Responses API model id and may also be
+        # present in localStorage from older ComfyClaw builds.  Route both
+        # to the current Codex CLI default.
+        if suffix in {"gpt-5", "gpt-5-codex"}:
+            return _CODEX_DEFAULT_MODEL
+        # Preserve future Codex GPT-5.x model ids instead of collapsing
+        # them to plain ``gpt-5``.
+        if suffix.startswith("gpt-5."):
+            return suffix
         if suffix.startswith("o3"):
             return "o3"
         if suffix.startswith("o4"):
             return "o4-mini"
-    return "gpt-5-codex"
+    return _CODEX_DEFAULT_MODEL
 
 
 # Gemini CLI defaults to Gemini 2.5 Pro on signed-in accounts; this set
@@ -646,13 +650,10 @@ async def _codex_chat_stream(
     # never`` so we don't need to pass it explicitly.
     argv = [binary, "exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only"]
     # Codex's model registry is *not* the LiteLLM registry.  When the
-    # user is signed in with a ChatGPT subscription, codex only accepts
-    # a fixed list of model ids (``gpt-5``, ``gpt-5-codex``, ``o3``…) —
-    # anything else gets rejected with ``model not supported with
-    # ChatGPT account``.  Translate the user's UI selection through
-    # :func:`_codex_pick_model` (which strips LiteLLM provider prefixes
-    # and whitelists against the known-good set), then apply it via
-    # ``-c model=…`` so the override beats the user's
+    # user is signed in with a ChatGPT subscription, codex accepts ids
+    # such as ``gpt-5.5`` and ``gpt-5.4``; plain ``gpt-5`` is rejected.
+    # Translate the user's UI selection through :func:`_codex_pick_model`,
+    # then apply it via ``-c model=…`` so the override beats the user's
     # ``~/.codex/config.toml`` without mutating that file.
     codex_model = _codex_pick_model(model)
     argv += ["-c", f'model="{codex_model}"']
@@ -766,11 +767,11 @@ async def _codex_chat_stream(
                         "**Fix:** set a supported codex model via env-var before "
                         "starting comfyclaw, e.g.\n\n"
                         "```\n"
-                        "export COMFYCLAW_CODEX_MODEL=gpt-5\n"
+                        "export COMFYCLAW_CODEX_MODEL=gpt-5.5\n"
                         "comfyclaw serve\n"
                         "```\n\n"
                         "Valid choices on a ChatGPT subscription typically "
-                        "include `gpt-5`, `gpt-5.5`, `o3`, `o4-mini`. "
+                        "include `gpt-5.5`, `gpt-5.4`, `o3`, `o4-mini`. "
                         "Original error:\n\n"
                         f"```\n{text}\n```"
                     )

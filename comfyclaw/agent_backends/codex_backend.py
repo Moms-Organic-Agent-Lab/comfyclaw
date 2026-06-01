@@ -141,13 +141,11 @@ class CodexBackend:
             "read-only",
         ]
         # Codex's allowed-model list is bound to the user's ChatGPT
-        # subscription — it does NOT overlap with the LiteLLM model
-        # dropdown.  Forwarding e.g. ``openai/gpt-5.5`` produces ``model
-        # not supported with ChatGPT account``.  We share the resolver
-        # used by the chat path (:func:`comfyclaw.chat_agent._codex_pick_model`)
-        # so the user's UI selection — Server default, GPT-5, GPT-5 Codex,
-        # o3, … — is translated to a known-good codex id.  ``-c model=…``
-        # beats any value in the user's ``~/.codex/config.toml`` for *this*
+        # subscription.  It accepts CLI ids such as ``gpt-5.5`` and
+        # ``gpt-5.4``, while plain ``gpt-5`` is rejected.  We share the
+        # resolver used by the chat path so old saved UI selections are
+        # translated to a supported Codex CLI id.  ``-c model=…`` beats
+        # any value in the user's ``~/.codex/config.toml`` for *this*
         # invocation only.
         from comfyclaw.chat_agent import _codex_pick_model
 
