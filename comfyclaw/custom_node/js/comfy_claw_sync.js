@@ -5036,6 +5036,12 @@ function _augmentPanelWithTabs(panel) {
   // 1) Build the skills + history tabs (lazy).
   const skillsTab = createSkillsTab({
     getWs: () => _activeSyncClient?.ws,
+    requestReconnect: () => {
+      if (_activeSyncClient?.ws?.readyState === WebSocket.OPEN) return;
+      _activeSyncClient?.destroy();
+      _activeSyncClient = new SyncClient();
+      _activeSyncClient.connect();
+    },
     getRuntimeContext: () => {
       const backend = _backendPickerRef?.value()
         || localStorage.getItem("comfyclaw_agent_backend")

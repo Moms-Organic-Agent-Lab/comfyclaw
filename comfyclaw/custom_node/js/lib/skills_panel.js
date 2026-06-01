@@ -35,9 +35,9 @@ function _send(ws, msg) {
 
 /**
  * Build the Skills tab.
- * @param {{ getWs: () => WebSocket | null, getRuntimeContext?: () => any }} ctx
+ * @param {{ getWs: () => WebSocket | null, getRuntimeContext?: () => any, requestReconnect?: () => void }} ctx
  */
-export function createSkillsTab({ getWs, getRuntimeContext }) {
+export function createSkillsTab({ getWs, getRuntimeContext, requestReconnect }) {
   const root = document.createElement("div");
   root.style.cssText = `
     padding: 10px 12px; flex: 1; min-height: 0;
@@ -188,7 +188,7 @@ export function createSkillsTab({ getWs, getRuntimeContext }) {
           </div>
           <div>
             WebSocket state: <strong>${escHtml(wsState)}</strong>.<br>
-            Start the server (<code>comfyclaw run</code>) and the list will
+            Start the server (<code>comfyclaw serve</code>) and the list will
             populate automatically.
           </div>
           <div class="cc-empty-actions">
@@ -198,7 +198,11 @@ export function createSkillsTab({ getWs, getRuntimeContext }) {
             </button>
           </div>
         </div>`;
-      $listEl.querySelector(".cc-empty-retry")?.addEventListener("click", refresh);
+      $listEl.querySelector(".cc-empty-retry")?.addEventListener("click", () => {
+        if (typeof requestReconnect === "function") requestReconnect();
+        // Give the socket a beat to transition OPEN, then fetch.
+        setTimeout(() => refresh(), 250);
+      });
       return;
     }
 
