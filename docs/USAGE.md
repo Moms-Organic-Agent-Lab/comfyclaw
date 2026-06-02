@@ -136,6 +136,11 @@ Supported backend ids: `litellm`, `claude-code`, `codex`, `gemini-cli`.
 Sign in to the matching CLI first (`claude /login`, `codex login`, or
 `gemini`).
 
+Claude Code uses your local Claude subscription login, not the Anthropic API
+key path. ComfyClaw strips stale `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`
+values before launching `claude`, so a bad API key in `.env` will not override
+`claude auth login`.
+
 Local setup helpers:
 
 ```bash
@@ -175,6 +180,7 @@ uv run comfyclaw doctor
 | Port busy | Stop the old server or pass `--sync-port <port>` |
 | Missing model/checkpoint | Install it in ComfyUI or pass `--image-model <name>` |
 | LiteLLM auth error | Set the provider API key or use a signed-in CLI backend |
+| Claude Code says `Invalid API key` | Restart `comfyclaw serve`; the CLI backend should use `claude auth login`, not `ANTHROPIC_API_KEY` |
 
 Useful commands:
 

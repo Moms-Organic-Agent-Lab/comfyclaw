@@ -205,6 +205,34 @@ class TestClaudeModelNormalisation:
         assert _normalise_claude_model(raw) == expected
 
 
+class TestClaudeEnvironment:
+    def test_claude_env_scrubs_external_api_keys(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from comfyclaw.agent_backends.base import _env_with_claude_path
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "bad-key")
+        monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "bad-token")
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://bad.example")
+        monkeypatch.setenv("PATH", "/usr/bin")
+
+        env = _env_with_claude_path("/tmp/claude-bin/claude")
+
+        assert "ANTHROPIC_API_KEY" not in env
+        assert "ANTHROPIC_AUTH_TOKEN" not in env
+        assert "ANTHROPIC_BASE_URL" not in env
+        assert env["PATH"].split(":")[0] == "/tmp/claude-bin"
+
+    def test_claude_env_can_preserve_external_api_keys(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from comfyclaw.agent_backends.base import _env_with_claude_path
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "explicit-key")
+
+        env = _env_with_claude_path("/tmp/claude", scrub_external_api_keys=False)
+
+        assert env["ANTHROPIC_API_KEY"] == "explicit-key"
+
+
 # ---------------------------------------------------------------------------
 # Codex model name normalisation
 # ---------------------------------------------------------------------------

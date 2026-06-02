@@ -128,14 +128,19 @@ def run_cli_oneshot(
     argv: list[str],
     stdin_text: str,
     timeout: float = 600.0,
-    env_overrides: dict[str, str] | None = None,
+    env: dict[str, str] | None = None,
+    env_overrides: dict[str, str | None] | None = None,
 ) -> tuple[int, str, str]:
     """Run ``argv`` with ``stdin_text`` piped in, return ``(rc, stdout, stderr)``."""
     import os
 
-    env = os.environ.copy()
+    child_env = dict(env) if env is not None else os.environ.copy()
     if env_overrides:
-        env.update(env_overrides)
+        for key, value in env_overrides.items():
+            if value is None:
+                child_env.pop(key, None)
+            else:
+                child_env[key] = value
     try:
         proc = subprocess.run(
             argv,
@@ -144,7 +149,7 @@ def run_cli_oneshot(
             text=True,
             timeout=timeout,
             check=False,
-            env=env,
+            env=child_env,
         )
         return proc.returncode, proc.stdout or "", proc.stderr or ""
     except subprocess.TimeoutExpired as exc:

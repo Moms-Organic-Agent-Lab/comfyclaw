@@ -168,6 +168,7 @@ If the user is asking *how to write a new skill*, point them at the
 | Panel not visible at all | Plugin not installed / ComfyUI not restarted | `comfyclaw install-node` then **restart ComfyUI** |
 | "Falling back to litellm — which will require an API key" in server log | Selected a CLI backend but not signed in | Click the amber chip, or run `claude /login` / `codex login` / `gemini` once |
 | "no API key" error on Generate | Selected `litellm` backend without an env var | Set `ANTHROPIC_API_KEY` (or the matching provider key) in `.env` |
+| Claude Code says "Invalid API key" despite being signed in | The server process inherited a stale Anthropic API env var | Restart `comfyclaw serve`; `claude-code` should use local `claude auth login` credentials |
 | Stuck at "Waiting for ComfyUI" | Wrong `--comfyui-addr` | Pass the correct `host:port` (often `127.0.0.1:7130` for Desktop) |
 | ComfyUI 400 on `/prompt` | Workflow uses the wrong format | ComfyClaw only sends **API format**; export via *Workflow → Export (API)* |
 | `Float8_e4m3fn` error on Apple Silicon | MPS doesn't support fp8 | Auto-repair sets `weight_dtype: "default"`; native fp8 files won't work |

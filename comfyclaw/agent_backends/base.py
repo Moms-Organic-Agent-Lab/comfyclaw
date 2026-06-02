@@ -262,7 +262,16 @@ def _resolve_claude_bin() -> str:
     return ""
 
 
-def _env_with_claude_path(binary: str) -> dict[str, str]:
+_CLAUDE_EXTERNAL_API_ENV = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_MODEL",
+    "CLAUDE_CODE_API_KEY",
+)
+
+
+def _env_with_claude_path(binary: str, *, scrub_external_api_keys: bool = True) -> dict[str, str]:
     """Return an env dict where the claude binary's directory is on PATH.
 
     Necessary because the Claude Code CLI is a node script (``#!/usr/bin/env
@@ -271,8 +280,17 @@ def _env_with_claude_path(binary: str) -> dict[str, str]:
     the script can even start.  We co-locate node + claude in the same
     bin dir under fnm/nvm/npm-global, so prepending that dir to PATH is
     enough to make both reachable to the kernel and to the script.
+
+    ComfyClaw's ``claude-code`` backend is subscription-login based.
+    If the parent ComfyUI process has a stale ``ANTHROPIC_API_KEY`` or
+    related external API override, Claude Code prefers it over the local
+    login and fails with "Invalid API key · Fix external API key".  Strip
+    those variables by default so the CLI uses ``claude auth login`` state.
     """
     env = {**os.environ}
+    if scrub_external_api_keys:
+        for key in _CLAUDE_EXTERNAL_API_ENV:
+            env.pop(key, None)
     binary_dir = os.path.dirname(binary) if binary else ""
     if binary_dir:
         existing = env.get("PATH", "")

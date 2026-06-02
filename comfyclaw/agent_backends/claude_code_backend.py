@@ -386,6 +386,8 @@ def _run_envelope(
     full_system = system + _stream_session.envelope_protocol_instructions(tools)
 
     def _invoke(prompt: str) -> str:
+        from .base import _env_with_claude_path
+
         argv = [
             bin_path,
             "-p",
@@ -397,7 +399,12 @@ def _run_envelope(
         ]
         if model:
             argv += ["--model", model]
-        rc, out, err = _stream_session.run_cli_oneshot(argv, prompt, timeout=300)
+        rc, out, err = _stream_session.run_cli_oneshot(
+            argv,
+            prompt,
+            timeout=300,
+            env=_env_with_claude_path(bin_path),
+        )
         if rc != 0 and not out:
             raise RuntimeError(f"claude rc={rc}: {err[:200]}")
         return out or err
