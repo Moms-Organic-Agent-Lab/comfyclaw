@@ -266,27 +266,38 @@ function createFeedbackPanel() {
          background:#313244; border-radius:8px; padding:12px; font-size:13px;
          white-space:pre-wrap; max-height:200px; overflow-y:auto;"></div>
     <label style="display:block; margin-bottom:4px; font-weight:600; color:#a6adc8;">
-      How is the result?
+      How did this generation turn out?
     </label>
-    <div id="comfyclaw-fb-scores" style="display:flex; gap:8px; margin-bottom:16px;">
+    <div id="comfyclaw-fb-scores" style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px;">
     </div>
     <label style="display:block; margin-bottom:4px; font-weight:600; color:#a6adc8;">
-      Feedback (what should be improved?)
+      Comment
     </label>
-    <textarea id="comfyclaw-fb-text" rows="4" placeholder="e.g. The lighting is too flat, make it more dramatic. The background needs more depth..."
+    <textarea id="comfyclaw-fb-text" rows="4" placeholder="What worked, what failed, or what should be improved?"
       style="width:100%; box-sizing:border-box; background:#313244; color:#cdd6f4;
              border:1px solid #45475a; border-radius:8px; padding:10px; font-size:14px;
              font-family:inherit; resize:vertical;"></textarea>
+    <label style="display:flex; align-items:flex-start; gap:8px; margin-top:12px; color:#a6adc8;
+                  font-size:13px; line-height:1.4; cursor:pointer;">
+      <input id="comfyclaw-fb-evolve" type="checkbox" checked
+             style="margin-top:2px; accent-color:#a6e3a1;">
+      <span>
+        Use this feedback for skill evolution
+        <span id="comfyclaw-fb-evolve-hint" style="display:block; color:#7f849c; font-size:12px;">
+          Good cases become reusable tactics; bad cases become repair lessons.
+        </span>
+      </span>
+    </label>
     <div style="display:flex; gap:10px; margin-top:16px; justify-content:flex-end;">
-      <button id="comfyclaw-fb-accept" style="padding:8px 20px; border:1px solid #45475a;
+      <button id="comfyclaw-fb-skip" style="padding:8px 20px; border:1px solid #45475a;
               border-radius:8px; background:#313244; color:#a6e3a1; cursor:pointer;
               font-size:14px; font-weight:600;">
-        ✓ Accept as-is
+        Skip
       </button>
       <button id="comfyclaw-fb-submit" style="padding:8px 20px; border:none;
               border-radius:8px; background:#cba6f7; color:#1e1e2e; cursor:pointer;
               font-size:14px; font-weight:600;">
-        Send Feedback →
+        Submit
       </button>
     </div>
   `;
@@ -295,17 +306,18 @@ function createFeedbackPanel() {
   document.body.appendChild(overlay);
 
   const scoreButtons = [
-    { label: "👍 Good", score: 0.9, color: "#a6e3a1" },
-    { label: "👌 OK", score: 0.6, color: "#f9e2af" },
-    { label: "👎 Needs Work", score: 0.3, color: "#f38ba8" },
+    { label: "Thumbs up", rating: "up", score: 0.9, color: "#a6e3a1" },
+    { label: "Thumbs down", rating: "down", score: 0.25, color: "#f38ba8" },
   ];
   const scoreContainer = panel.querySelector("#comfyclaw-fb-scores");
-  let selectedScore = 0.6;
+  let selectedScore = 0.9;
+  let selectedRating = "up";
 
-  scoreButtons.forEach(({ label, score, color }) => {
+  scoreButtons.forEach(({ label, rating, score, color }) => {
     const btn = document.createElement("button");
     btn.textContent = label;
     btn.dataset.score = score;
+    btn.dataset.rating = rating;
     Object.assign(btn.style, {
       flex: "1",
       padding: "8px 4px",
@@ -320,6 +332,7 @@ function createFeedbackPanel() {
     });
     btn.addEventListener("click", () => {
       selectedScore = score;
+      selectedRating = rating;
       scoreContainer.querySelectorAll("button").forEach(b => {
         b.style.borderColor = "#45475a";
         b.style.background = "#313244";
@@ -328,20 +341,35 @@ function createFeedbackPanel() {
       btn.style.borderColor = color;
       btn.style.background = color + "22";
       btn.style.color = color;
+      const evolve = panel.querySelector("#comfyclaw-fb-evolve");
+      const hint = panel.querySelector("#comfyclaw-fb-evolve-hint");
+      if (evolve && !evolve.dataset.userTouched) evolve.checked = true;
+      if (hint) {
+        hint.textContent = rating === "up"
+          ? "Save this as a good case so future runs can reuse what worked."
+          : "Save this as a bad case so future runs can avoid or repair the failure.";
+      }
     });
     scoreContainer.appendChild(btn);
   });
 
-  // Pre-select "OK"
-  scoreContainer.children[1].click();
+  const evolveBox = panel.querySelector("#comfyclaw-fb-evolve");
+  evolveBox?.addEventListener("change", () => { evolveBox.dataset.userTouched = "1"; });
+
+  // Pre-select "Thumbs up"
+  scoreContainer.children[0].click();
 
   function sendFeedback(action) {
-    const text = panel.querySelector("#comfyclaw-fb-text").value.trim();
+    const comment = panel.querySelector("#comfyclaw-fb-text").value.trim();
+    const evolve = !!panel.querySelector("#comfyclaw-fb-evolve")?.checked;
     const msg = {
       type: "human_feedback",
-      text: action === "accept" ? "" : text,
-      score: action === "accept" ? 0.85 : selectedScore,
-      action: action,
+      text: comment,
+      comment,
+      rating: action === "skip" ? "neutral" : selectedRating,
+      score: action === "skip" ? 0.5 : selectedScore,
+      evolve: action === "skip" ? false : evolve,
+      action: action === "skip" ? "skip" : (selectedRating === "up" ? "accept" : "override"),
     };
     if (_activeSyncClient && _activeSyncClient.ws && _activeSyncClient.ws.readyState === WebSocket.OPEN) {
       _activeSyncClient.ws.send(JSON.stringify(msg));
@@ -351,8 +379,8 @@ function createFeedbackPanel() {
     setStatus("connected");
   }
 
-  panel.querySelector("#comfyclaw-fb-submit").addEventListener("click", () => sendFeedback("override"));
-  panel.querySelector("#comfyclaw-fb-accept").addEventListener("click", () => sendFeedback("accept"));
+  panel.querySelector("#comfyclaw-fb-submit").addEventListener("click", () => sendFeedback("submit"));
+  panel.querySelector("#comfyclaw-fb-skip").addEventListener("click", () => sendFeedback("skip"));
 
   return overlay;
 }
@@ -373,9 +401,14 @@ function showFeedbackPanel(msg) {
   }
 
   _feedbackPanel.querySelector("#comfyclaw-fb-text").value = "";
-  // Re-select "OK" as default
+  const evolve = _feedbackPanel.querySelector("#comfyclaw-fb-evolve");
+  if (evolve) {
+    evolve.checked = true;
+    delete evolve.dataset.userTouched;
+  }
+  // Re-select "Thumbs up" as default
   const scores = _feedbackPanel.querySelector("#comfyclaw-fb-scores");
-  if (scores && scores.children[1]) scores.children[1].click();
+  if (scores && scores.children[0]) scores.children[0].click();
 
   _feedbackPanel.style.display = "flex";
   setStatus("feedback");
@@ -5687,6 +5720,30 @@ class SyncClient {
     } else if (msg.type === "iteration_score") {
       // Phase 4: live scoreboard card in the agent log + History timeline.
       if (typeof _scoreboardSink === "function") _scoreboardSink(msg);
+    } else if (msg.type === "skill_evolution_proposal") {
+      const p = msg.proposal || {};
+      const evidence = Array.isArray(p.evidence) ? p.evidence.slice(0, 4).join("\n- ") : "";
+      const approved = confirm(
+        `ComfyClaw proposes to ${p.action || "update"} skill "${p.name || ""}".\n\n` +
+        `${p.description || ""}\n\n` +
+        `Rationale:\n${p.rationale || ""}\n\n` +
+        (evidence ? `Evidence:\n- ${evidence}\n\n` : "") +
+        "Apply this skill evolution?"
+      );
+      if (_ws && _ws.readyState === WebSocket.OPEN) {
+        _ws.send(JSON.stringify({
+          type: "apply_skill_evolution",
+          approved,
+          name: p.name || "",
+        }));
+      }
+      appendAgentLog({
+        event_type: "info",
+        content: approved
+          ? `Skill evolution approved: **${p.name || ""}**`
+          : `Skill evolution skipped: **${p.name || ""}**`,
+        timestamp: Date.now() / 1000,
+      });
     } else if (msg.type === "skills_manifest"
       || msg.type === "skill_body"
       || msg.type === "skill_import_result"

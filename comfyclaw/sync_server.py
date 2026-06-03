@@ -135,6 +135,7 @@ class _ConnState:
     # asyncio futures — only valid inside the event-loop thread
     feedback_fut: Any = None  # asyncio.Future[dict] | None
     refinement_fut: Any = None  # asyncio.Future[dict] | None
+    skill_evolution_fut: Any = None  # asyncio.Future[dict] | None
 
     # ── Run-mode early-stop (accept_now) ──────────────────────────────────────
     accept_now: threading.Event = field(default_factory=threading.Event)
@@ -395,6 +396,48 @@ class SyncServer:
         if tool_args:
             msg["tool_args"] = tool_args
         self._send_json(msg, target_ws=target_ws)
+
+    def request_skill_evolution(
+        self,
+        proposal: dict,
+        target_ws: Any = None,
+        timeout: float = 600.0,
+    ) -> bool:
+        """Ask one ComfyUI tab whether a post-run skill proposal should apply."""
+        if not self._loop or not self.is_running():
+            return False
+
+        async def _ask() -> bool:
+            with self._conns_lock:
+                ws = (
+                    target_ws
+                    if target_ws and target_ws in self._conns
+                    else next(iter(self._conns.keys()), None)
+                )
+                conn = self._conns.get(ws) if ws else None
+            if ws is None or conn is None:
+                return False
+            fut = self._loop.create_future()  # type: ignore[union-attr]
+            conn.skill_evolution_fut = fut
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "skill_evolution_proposal",
+                        "proposal": proposal,
+                    }
+                )
+            )
+            try:
+                reply = await asyncio.wait_for(fut, timeout=timeout)
+            finally:
+                conn.skill_evolution_fut = None
+            return bool(reply.get("approved"))
+
+        fut = asyncio.run_coroutine_threadsafe(_ask(), self._loop)
+        try:
+            return bool(fut.result(timeout=timeout + 5.0))
+        except Exception:
+            return False
 
     # ── trigger queue (serve loop) ───────────────────────────────────────────
 
@@ -1655,6 +1698,13 @@ class SyncServer:
 
         elif t == "apply_skill_refine":
             asyncio.ensure_future(self._apply_skill_refine(ws, msg))
+
+        elif t == "apply_skill_evolution":
+            approved = bool(msg.get("approved", False))
+            if conn.skill_evolution_fut and not conn.skill_evolution_fut.done():
+                conn.skill_evolution_fut.set_result({"approved": approved})
+            else:
+                await self._send_skill_error(ws, "No pending skill evolution proposal.")
 
         # ── Agent backend availability probe ─────────────────────────────────
         elif t == "list_agent_backends":

@@ -22,6 +22,8 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import sys
+import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -30,6 +32,7 @@ from pathlib import Path
 from .agent import ClawAgent
 from .client import ComfyClient
 from .memory import ClawMemory
+from .skill_evolver import SkillEvolutionProposal, SkillEvolver
 from .sync_server import SyncServer
 from .verifier import ClawVerifier, VerifierResult
 from .workflow import WorkflowManager
@@ -106,6 +109,9 @@ class HarnessConfig:
     modality: str = "image"  # "image" | "video"
     video_frames: int = 6  # frames sampled per clip for the verifier
     generation_timeout: int = 0  # seconds; 0 = image/video defaults
+    enable_skill_evolution: bool = True
+    skill_evolution_min_confidence: float = 0.55
+    skill_evolution_auto_apply: bool = False
     """
     Pin the image-generation model (checkpoint / UNET) used by ComfyUI.
 
@@ -637,6 +643,12 @@ class ClawHarness:
             print("[ClawHarness] 🔍 Verifying image…")
             self._emit_status("verifying", iteration, "Verifying image…")
             result = self._verifier.verify(image_bytes, prompt, iteration=iteration)
+            result = self._collect_user_feedback_after_generation(
+                result,
+                image_bytes,
+                prompt,
+                iteration,
+            )
             prev_score = last_result.score if last_result is not None else None
             last_result = result
             print(f"[ClawHarness] Score: {result.score:.2f}")
@@ -664,7 +676,14 @@ class ClawHarness:
                 )
 
             # ── Record in memory ──────────────────────────────────────────
-            experience = self._summarize_experience(prompt, result.passed, result.failed, rationale)
+            feedback_meta = self._feedback_metadata(result)
+            experience = self._summarize_experience(
+                prompt,
+                result.passed,
+                result.failed,
+                rationale,
+                feedback_meta,
+            )
             self._memory.record(
                 iteration=iteration,
                 workflow_snapshot=wm.to_dict(),
@@ -673,6 +692,10 @@ class ClawHarness:
                 failed=result.failed,
                 experience=experience,
                 image_bytes=image_bytes,
+                feedback_rating=feedback_meta["rating"],
+                feedback_comment=feedback_meta["comment"],
+                feedback_case=feedback_meta["case"],
+                evolve_requested=feedback_meta["evolve"],
             )
 
             # ── User accept-now early stop ────────────────────────────────
@@ -690,6 +713,7 @@ class ClawHarness:
                 )
                 break
 
+        self._run_skill_evolution(prompt)
         self._print_summary(best_score)
         return best_image
 
@@ -732,6 +756,74 @@ class ClawHarness:
         if data:
             return data.get("text", "").strip() or None
         return None
+
+    def _collect_user_feedback_after_generation(
+        self,
+        result: VerifierResult,
+        image_bytes: bytes,
+        prompt: str,
+        iteration: int,
+    ) -> VerifierResult:
+        """Ask for thumbs/comment/evolve feedback after a VLM-only pass."""
+        if getattr(result, "feedback_source", "vlm") != "vlm":
+            return result
+        if not self._sync or not self._sync.has_clients():
+            return result
+
+        try:
+            from .human_verifier import _sniff_extension
+
+            out_dir = Path(tempfile.gettempdir())
+            ext = _sniff_extension(image_bytes)
+            image_path = out_dir / f"comfyclaw_review_iter{iteration}{ext}"
+            image_path.write_bytes(image_bytes)
+            self._sync.request_feedback(
+                image_path=str(image_path),
+                vlm_summary=result.format_feedback(),
+                iteration=iteration,
+                prompt=prompt,
+                target_ws=getattr(self, "_sync_ws", None),
+            )
+            feedback = self._sync.wait_for_human_feedback(
+                timeout=600.0,
+                source_ws=getattr(self, "_sync_ws", None),
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[HumanFeedback] skipped: {exc}")
+            return result
+
+        if not feedback:
+            return result
+        if feedback.get("action") == "skip":
+            result.human_feedback = {
+                **dict(feedback),
+                "rating": "neutral",
+                "comment": feedback.get("comment") or feedback.get("text", ""),
+                "evolve": False,
+            }
+            return result
+
+        comment = str(feedback.get("comment") or feedback.get("text") or "").strip()
+        rating = str(feedback.get("rating") or "").strip().lower()
+        if feedback.get("score") is not None:
+            try:
+                result.score = max(0.0, min(1.0, float(feedback["score"])))
+            except (TypeError, ValueError):
+                pass
+        if comment:
+            result.evolution_suggestions = [f"[HUMAN] {comment}"] + result.evolution_suggestions
+        if rating == "down":
+            result.failed = result.failed or ["Human marked this generation as a bad case."]
+            result.overall_assessment = f"[Human feedback] {comment or 'Needs work.'}"
+        elif rating == "up" and comment:
+            result.overall_assessment = f"[Human feedback] {comment}"
+        result.feedback_source = "hybrid"
+        result.human_feedback = {
+            **dict(feedback),
+            "comment": comment,
+            "rating": rating or ("up" if result.score >= 0.75 else "down"),
+        }
+        return result
 
     def _on_agent_event(
         self,
@@ -817,18 +909,125 @@ class ClawHarness:
             experience=f"Workflow failed: {msg}. Inspect and fix before next attempt.",
         )
 
+    def _feedback_metadata(self, result: VerifierResult) -> dict[str, object]:
+        raw = dict(getattr(result, "human_feedback", {}) or {})
+        comment = str(raw.get("comment") or raw.get("text") or "").strip()
+        rating = str(raw.get("rating") or "").strip().lower()
+        if not rating:
+            rating = "up" if result.score >= 0.75 else "down" if result.score <= 0.4 else "neutral"
+        if rating in {"thumbs_up", "like", "liked", "good", "positive"}:
+            rating = "up"
+        elif rating in {"thumbs_down", "dislike", "bad", "negative"}:
+            rating = "down"
+        elif rating not in {"up", "down", "neutral"}:
+            rating = "neutral"
+
+        case = "good case" if rating == "up" else "bad case" if rating == "down" else ""
+        evolve_raw = raw.get("evolve")
+        if evolve_raw is None:
+            evolve = bool(case and getattr(result, "feedback_source", "") in {"human", "hybrid"})
+        else:
+            evolve = bool(evolve_raw)
+        return {
+            "rating": rating,
+            "comment": comment,
+            "case": case,
+            "evolve": evolve,
+        }
+
     def _summarize_experience(
-        self, prompt: str, passed: list[str], failed: list[str], rationale: str
+        self,
+        prompt: str,
+        passed: list[str],
+        failed: list[str],
+        rationale: str,
+        feedback_meta: dict[str, object] | None = None,
     ) -> str:
+        feedback_meta = feedback_meta or {}
+        human_line = ""
+        if feedback_meta.get("case"):
+            human_line = (
+                f"\nHuman feedback: {feedback_meta.get('case')} "
+                f"(rating={feedback_meta.get('rating')}, "
+                f"evolve={feedback_meta.get('evolve')}). "
+                f"Comment: {feedback_meta.get('comment') or 'none'}"
+            )
         try:
             msg = (
                 f"Summarize in ≤80 words. Focus on what worked, failed, and the key lesson.\n\n"
                 f"Prompt: {prompt}\nPassed: {', '.join(passed) or 'none'}\n"
                 f"Failed: {', '.join(failed) or 'none'}\nAgent rationale: {rationale}"
+                f"{human_line}"
             )
             return self._verifier.complete(msg, max_tokens=200)
         except Exception as exc:
             return f"Summary unavailable: {exc}"
+
+    def _run_skill_evolution(self, prompt: str) -> None:
+        if not self.config.enable_skill_evolution:
+            return
+        if not self._memory.attempts:
+            return
+        human_feedback_seen = any(a.feedback_case for a in self._memory.attempts)
+        if human_feedback_seen and not any(a.evolve_requested for a in self._memory.attempts):
+            print("[SkillEvolver] Human feedback received; user did not request evolution.")
+            return
+
+        def _complete(text: str, max_tokens: int) -> str:
+            verifier = self._verifier
+            if verifier is None or not hasattr(verifier, "complete"):
+                raise RuntimeError("no text completion backend available")
+            return verifier.complete(text, max_tokens=max_tokens)
+
+        evolver = SkillEvolver(
+            self._agent.skill_manager,
+            complete=_complete if self._verifier is not None else None,
+            min_confidence=self.config.skill_evolution_min_confidence,
+        )
+        try:
+            result = evolver.maybe_evolve(
+                prompt=prompt,
+                memory=self._memory,
+                evolution_log=self._evolution_log.format(),
+                confirm=self._confirm_skill_evolution,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[SkillEvolver] skipped: {exc}")
+            return
+        if result.proposal is None:
+            print("[SkillEvolver] No reusable skill update proposed.")
+        elif result.applied:
+            print(f"[SkillEvolver] {result.message}")
+            try:
+                self._agent.skill_manager.reload()
+                if self._sync:
+                    self._sync.reload_skills()
+            except Exception:
+                pass
+        else:
+            print(f"[SkillEvolver] {result.message}")
+
+    def _confirm_skill_evolution(self, proposal: SkillEvolutionProposal) -> bool:
+        if self.config.skill_evolution_auto_apply:
+            return True
+        if self._sync and hasattr(self._sync, "request_skill_evolution"):
+            try:
+                return bool(
+                    self._sync.request_skill_evolution(
+                        proposal.to_dict(),
+                        target_ws=getattr(self, "_sync_ws", None),
+                        timeout=600.0,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[SkillEvolver] UI approval unavailable: {exc}")
+        print("\n[SkillEvolver] ── Proposed Skill Evolution ──")
+        print(proposal.format_for_human())
+        if not sys.stdin.isatty():
+            print("[SkillEvolver] Non-interactive terminal; proposal not applied.")
+            return False
+        answer = input("\nApply this skill evolution? [y/N] ").strip().lower()
+        return answer in {"y", "yes"}
 
     def _print_summary(self, best_score: float) -> None:
         print("\n[ClawHarness] ── Evolution Summary ──")

@@ -116,12 +116,16 @@ class TestHumanVerifier:
             "text": "",
             "score": 0.85,
             "action": "accept",
+            "rating": "up",
+            "evolve": True,
         }
         verifier = HumanVerifier(sync_server=mock_sync, output_dir=str(tmp_path))
         result = verifier.verify(png_bytes, "a cat", iteration=1)
 
         assert result.score == 0.85
         assert result.feedback_source == "human"
+        assert result.human_feedback["rating"] == "up"
+        assert result.human_feedback["evolve"] is True
 
     def test_websocket_timeout(self, mock_sync, png_bytes, tmp_path):
         mock_sync.wait_for_human_feedback.return_value = None

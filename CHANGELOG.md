@@ -7,7 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-— No changes since v0.1.0.
+### Added
+
+- Post-generation feedback dialog in the ComfyUI panel with thumbs-up /
+  thumbs-down rating, optional comment, and opt-in skill evolution.
+- Post-run `SkillEvolver` path that distills human-labeled good cases into
+  reusable workflow tactics and bad cases into repair / avoidance lessons.
+- Skill evolution approval protocol over the sync WebSocket, plus CLI flags
+  to disable or auto-apply post-run skill updates.
+
+### Changed
+
+- Per-run memory now records human feedback metadata so later agent iterations
+  and skill proposals can distinguish good cases from bad cases.
 
 ---
 

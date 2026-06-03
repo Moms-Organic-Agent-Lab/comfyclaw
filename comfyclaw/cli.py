@@ -411,6 +411,9 @@ def _cmd_run(args: argparse.Namespace, dry: bool = False) -> None:
         video_frames=getattr(args, "video_frames", 6),
         generation_timeout=getattr(args, "generation_timeout", 0),
         api_base=(getattr(args, "api_base", "") or "").strip() or None,
+        enable_skill_evolution=not getattr(args, "no_skill_evolution", False),
+        skill_evolution_min_confidence=getattr(args, "skill_evolution_min_confidence", 0.55),
+        skill_evolution_auto_apply=getattr(args, "auto_apply_skill_evolution", False),
     )
 
     verifier_label = cfg.verifier_model or f"{cfg.model} (shared)"
@@ -433,6 +436,10 @@ def _cmd_run(args: argparse.Namespace, dry: bool = False) -> None:
     print(f"[cli] Sync port      : {cfg.sync_port or 'disabled'}")
     print(f"[cli] Evolve mode    : {'accumulate' if cfg.evolve_from_best else 'reset'}")
     print(f"[cli] Repair limit   : {cfg.max_repair_attempts} attempt(s) per iteration")
+    print(
+        f"[cli] Skill evolve   : {'on' if cfg.enable_skill_evolution else 'off'}"
+        f"{' (auto-apply)' if cfg.skill_evolution_auto_apply else ''}"
+    )
 
     if args.workflow:
         ctx = ClawHarness.from_workflow_file(args.workflow, cfg)
@@ -486,6 +493,9 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         "video_frames": getattr(args, "video_frames", 6),
         "generation_timeout": getattr(args, "generation_timeout", 0),
         "api_base": (getattr(args, "api_base", "") or "").strip() or None,
+        "enable_skill_evolution": not getattr(args, "no_skill_evolution", False),
+        "skill_evolution_min_confidence": getattr(args, "skill_evolution_min_confidence", 0.55),
+        "skill_evolution_auto_apply": getattr(args, "auto_apply_skill_evolution", False),
     }
 
     # ── Print the config block first ────────────────────────────────────
@@ -1325,6 +1335,31 @@ def _build_parser() -> argparse.ArgumentParser:
             help=(
                 "Seconds to wait for ComfyUI generation. Default 600 for image, "
                 "2400 for video. Overrides COMFYCLAW_GENERATION_TIMEOUT."
+            ),
+        )
+        p.add_argument(
+            "--no-skill-evolution",
+            action="store_true",
+            default=not _env_bool("COMFYCLAW_ENABLE_SKILL_EVOLUTION", True),
+            help=(
+                "Disable post-run skill self-evolution. By default ComfyClaw reflects "
+                "after each verified run and asks before writing any skill."
+            ),
+        )
+        p.add_argument(
+            "--skill-evolution-min-confidence",
+            type=float,
+            default=_env_float("COMFYCLAW_SKILL_EVOLUTION_MIN_CONFIDENCE", 0.55),
+            metavar="N",
+            help="Minimum proposal confidence required before asking the human. Default 0.55.",
+        )
+        p.add_argument(
+            "--auto-apply-skill-evolution",
+            action="store_true",
+            default=_env_bool("COMFYCLAW_AUTO_APPLY_SKILL_EVOLUTION", False),
+            help=(
+                "Apply proposed skill changes without human confirmation. Intended for "
+                "trusted offline experiments only."
             ),
         )
 

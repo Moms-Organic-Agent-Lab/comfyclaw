@@ -25,6 +25,8 @@ by `ClawHarness`.
 | Transient-fault detection (ComfyUI tqdm/BrokenPipe) | `comfyclaw/harness.py` | `_INFRA_ERROR_SIGNALS`, infra-retry branch in `run` |
 | Pinned-model invariant (`image_model`) | `comfyclaw/workflow.py` | `WorkflowManager.apply_image_model` |
 | Pre-iteration verifier feedback assembly | `comfyclaw/harness.py` | `ClawHarness._build_feedback` |
+| Post-generation human feedback capture | `comfyclaw/harness.py` | `ClawHarness._collect_user_feedback_after_generation`, `_feedback_metadata` |
+| Post-run skill evolution | `comfyclaw/harness.py`, `comfyclaw/skill_evolver.py` | `ClawHarness._run_skill_evolution`, `SkillEvolver.propose`, `SkillEvolver.apply` |
 
 A single call to `ClawHarness.run(prompt)`:
 
@@ -35,7 +37,9 @@ A single call to `ClawHarness.run(prompt)`:
    up to `max_repair_attempts` recovery rounds for queue/execution errors;
 4. fetches the produced image, runs the configured verifier, and feeds the
    score plus critique back to the agent for the next iteration;
-5. early-stops on the success threshold *or* an explicit user "accept
+5. optionally collects thumbs-up/thumbs-down feedback plus a comment from the
+   panel and records it as a good or bad case for later skill evolution;
+6. early-stops on the success threshold *or* an explicit user "accept
    now" signal coming through `SyncServer`.
 
 ## 2. The agent and its tool catalogue
@@ -119,6 +123,8 @@ import-from-`git`-URL flow as any other skill.
 | Import: zip (safe extraction, single top dir) | `comfyclaw/skill_manager.py` | `_safe_unzip_into`, `SkillsRegistry.import_zip` |
 | Import: `git clone --depth=1` | `comfyclaw/skill_manager.py` | `_git_clone_into`, `SkillsRegistry.import_git` |
 | Read full body on demand (`read_skill` tool) | `comfyclaw/skill_manager.py` | `SkillsRegistry.read_body` |
+| Post-run proposal from run evidence | `comfyclaw/skill_evolver.py` | `SkillEvolver`, `SkillEvolutionProposal`, `SkillEvolutionResult` |
+| User-skill create / refine write path | `comfyclaw/skill_manager.py` | `SkillsRegistry.upsert_user_skill`, `SkillsRegistry.update_body` |
 | Offline cluster / mutate / validate / commit (§3.4) | *not in this release* | The 318 paper-evolved skills are distributed as ordinary `SKILL.md` files; re-running the offline loop is not required to reuse them. |
 | Bundled skill catalogue | `comfyclaw/skills/<skill_id>/SKILL.md` | see `comfyclaw/skills/README.md` |
 
@@ -147,6 +153,7 @@ import-from-`git`-URL flow as any other skill.
 | Routed broadcasts (per-tab) | `comfyclaw/sync_server.py` | `SyncServer.broadcast` (with `target_ws`), `SyncServer._send_json` |
 | Trigger queue (panel → harness) | `comfyclaw/sync_server.py` | `SyncServer.wait_for_trigger` |
 | Human-feedback round trip | `comfyclaw/sync_server.py` | `SyncServer.request_feedback`, `SyncServer.wait_for_human_feedback` |
+| Skill-evolution approval round trip | `comfyclaw/sync_server.py` | `SyncServer.request_skill_evolution`, `_ConnState.skill_evolution_fut` |
 | Per-iteration scoreboard event | `comfyclaw/sync_server.py` | `SyncServer.send_iteration_score` |
 | Per-tab checkpoints (save / restore) | `comfyclaw/sync_server.py` | `_ConnState.save_checkpoint`, `restore_checkpoint` |
 | Skill-CRUD messages | `comfyclaw/sync_server.py` | handlers in `_handle_message` |

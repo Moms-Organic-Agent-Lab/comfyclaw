@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from comfyclaw.harness import ClawHarness, EvolutionEntry, HarnessConfig
+from comfyclaw.skill_manager import SkillsRegistry
 
 # ---------------------------------------------------------------------------
 # Config fixture
@@ -252,6 +253,51 @@ class TestEvolutionLog:
         assert "Iter 1" in s
         assert "5→7" in s
         assert "0.72" in s
+
+
+# ---------------------------------------------------------------------------
+# Skill self-evolution
+# ---------------------------------------------------------------------------
+
+
+class TestSkillEvolution:
+    def test_post_run_skill_evolution_can_auto_apply(
+        self, minimal_workflow: dict, cfg: HarnessConfig, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("COMFYCLAW_USER_SKILLS_DIR", str(tmp_path / "skills"))
+        cfg.max_iterations = 1
+        cfg.skill_evolution_auto_apply = True
+
+        mock_verifier = _mock_verifier(score=0.5)
+
+        def complete(prompt: str, max_tokens: int = 200) -> str:
+            if "Return ONLY JSON" in prompt:
+                return json.dumps(
+                    {
+                        "action": "create",
+                        "name": "post-run-skill",
+                        "description": "Reusable lesson from a completed run.",
+                        "body": "1. Reuse the verified workflow lesson.",
+                        "rationale": "The completed run produced reusable evidence.",
+                        "evidence": ["attempt scored 0.5"],
+                        "confidence": 0.9,
+                    }
+                )
+            return "Brief experience."
+
+        mock_verifier.complete.side_effect = complete
+        h = _make_harness(
+            minimal_workflow,
+            cfg,
+            verifier=mock_verifier,
+            client=_mock_comfy_client(),
+        )
+        h._agent.skill_manager = SkillsRegistry(quiet=True)
+
+        h.run("a fox")
+
+        assert "post-run-skill" in h._agent.skill_manager.skill_names
+        assert "verified workflow lesson" in h._agent.skill_manager.get_body("post-run-skill")
 
 
 # ---------------------------------------------------------------------------

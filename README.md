@@ -70,7 +70,8 @@ or the paper for the full tables.
   Google's `gemini`. CLI backends pipe `tools` and tool-results over a
   persistent JSON-stream session
 - **Human-in-the-loop** — give subjective feedback directly from the ComfyUI
-  panel during a Co-pilot run
+  panel after generation: thumbs up/down, optional comments, and opt-in skill
+  evolution from good and bad cases
 - **Any LLM, any provider** — swap agent and verifier models independently via
   [LiteLLM](https://docs.litellm.ai/docs/providers) (Anthropic, OpenAI, Gemini,
   Ollama, 100+ more)
@@ -347,6 +348,9 @@ Common flags:
 | `--sync-port PORT` | `8765` | WebSocket port for live sync |
 | `--no-sync` | off | Disable live sync |
 | `--skills-dir DIR` | *(built-in)* | Custom skill directory |
+| `--no-skill-evolution` | off | Disable post-run skill proposal from run evidence and human feedback |
+| `--skill-evolution-min-confidence N` | `0.55` | Minimum proposal confidence before asking to apply a skill update |
+| `--auto-apply-skill-evolution` | off | Apply proposed skill changes without confirmation; intended for offline experiments |
 | `--reset-each-iter` | off | Reset to base workflow each iteration |
 | `--output-dir DIR` | `./comfyclaw_output/` | Where to save the best image |
 | `--debug-no-generate` | off | Build the workflow but skip ComfyUI execution |
@@ -475,6 +479,19 @@ a full browser:
 Imports persist under `~/.comfyclaw/skills/` (override with
 `COMFYCLAW_USER_SKILLS_DIR`).  An adjacent `skills_state.json` records the
 enabled flag and source (`builtin` / `local` / `zip` / `git`) for every skill.
+
+### Post-run skill evolution
+
+After a generation is verified, the panel can ask for human feedback on the
+result. The reviewer can mark it as a thumbs-up good case or a thumbs-down bad
+case, add a comment, and choose whether that feedback should be used for skill
+evolution. Good cases are distilled into reusable workflow and prompt tactics;
+bad cases are distilled into failure modes and repair protocols.
+
+When ComfyClaw finds a reusable lesson, it proposes a new user skill or an
+update to an existing skill. By default the proposal is shown for approval
+before anything is written. Approved skills are stored with the normal imported
+skills under `~/.comfyclaw/skills/`, then the running skill registry is reloaded.
 
 ---
 

@@ -103,8 +103,9 @@ class HumanVerifier:
 
         return self._make_result(
             score=feedback.get("score", 0.5),
-            text=feedback.get("text", ""),
+            text=feedback.get("comment") or feedback.get("text", ""),
             action=feedback.get("action", "override"),
+            raw_feedback=feedback,
         )
 
     def _verify_via_terminal(self, image_path: str, prompt: str, iteration: int) -> VerifierResult:
@@ -130,10 +131,34 @@ class HumanVerifier:
         text = input("  Feedback> ").strip()
 
         action = "accept" if not text else "override"
-        return self._make_result(score=score, text=text, action=action)
+        rating = "up" if score >= 0.75 else "down" if score <= 0.4 else "neutral"
+        return self._make_result(
+            score=score,
+            text=text,
+            action=action,
+            raw_feedback={
+                "rating": rating,
+                "comment": text,
+                "evolve": action == "accept",
+                "source": "terminal",
+            },
+        )
 
     @staticmethod
-    def _make_result(score: float, text: str, action: str) -> VerifierResult:
+    def _make_result(
+        score: float,
+        text: str,
+        action: str,
+        raw_feedback: dict | None = None,
+    ) -> VerifierResult:
+        raw_feedback = dict(raw_feedback or {})
+        rating = str(raw_feedback.get("rating") or "").strip().lower()
+        if not rating:
+            rating = "up" if score >= 0.75 else "down" if score <= 0.4 else "neutral"
+            raw_feedback["rating"] = rating
+        raw_feedback.setdefault("comment", text)
+        raw_feedback.setdefault("evolve", action == "accept" and rating == "up")
+
         suggestions = []
         if text:
             for line in text.replace(";", "\n").split("\n"):
@@ -152,6 +177,7 @@ class HumanVerifier:
             overall_assessment=assessment,
             evolution_suggestions=suggestions,
             feedback_source="human",
+            human_feedback=raw_feedback,
         )
 
 
@@ -216,6 +242,12 @@ class HybridVerifier:
 
         if feedback.get("action") == "accept":
             print("[HybridVerifier] ✅ Human accepted VLM result.")
+            vlm_result.feedback_source = "hybrid"
+            vlm_result.human_feedback = {
+                **dict(feedback),
+                "rating": feedback.get("rating") or "up",
+                "comment": feedback.get("comment") or feedback.get("text", ""),
+            }
             return vlm_result
 
         return self._merge_feedback(vlm_result, feedback)
@@ -255,7 +287,7 @@ class HybridVerifier:
     @staticmethod
     def _merge_feedback(vlm_result: VerifierResult, feedback: dict) -> VerifierResult:
         """Merge human feedback into the VLM result."""
-        text = feedback.get("text", "")
+        text = feedback.get("comment") or feedback.get("text", "")
         score = feedback.get("score", vlm_result.score)
 
         human_suggestions = []
@@ -271,4 +303,9 @@ class HybridVerifier:
         )
         vlm_result.evolution_suggestions = human_suggestions + vlm_result.evolution_suggestions
         vlm_result.feedback_source = "hybrid"
+        vlm_result.human_feedback = {
+            **getattr(vlm_result, "human_feedback", {}),
+            **dict(feedback),
+            "comment": text,
+        }
         return vlm_result

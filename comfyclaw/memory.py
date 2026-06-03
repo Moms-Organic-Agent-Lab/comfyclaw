@@ -19,6 +19,10 @@ class Attempt:
     failed: list[str]
     experience: str  # ≤80-word compressed lesson
     image_bytes: bytes | None = field(default=None, repr=False)
+    feedback_rating: str = ""
+    feedback_comment: str = ""
+    feedback_case: str = ""
+    evolve_requested: bool = False
 
 
 class ClawMemory:
@@ -49,6 +53,10 @@ class ClawMemory:
         failed: list[str],
         experience: str,
         image_bytes: bytes | None = None,
+        feedback_rating: str = "",
+        feedback_comment: str = "",
+        feedback_case: str = "",
+        evolve_requested: bool = False,
     ) -> None:
         self.attempts.append(
             Attempt(
@@ -59,6 +67,10 @@ class ClawMemory:
                 failed=failed,
                 experience=experience,
                 image_bytes=image_bytes if self.max_images > 0 else None,
+                feedback_rating=feedback_rating,
+                feedback_comment=feedback_comment,
+                feedback_case=feedback_case,
+                evolve_requested=evolve_requested,
             )
         )
         self._evict_old_images()
@@ -96,6 +108,13 @@ class ClawMemory:
                 f"  Failed: {', '.join(a.failed) or 'none'}\n"
                 f"  Experience: {a.experience}"
             )
+            if a.feedback_case:
+                comment = f"; comment={a.feedback_comment}" if a.feedback_comment else ""
+                lines.append(
+                    f"  Human feedback: {a.feedback_case}"
+                    f" rating={a.feedback_rating or 'unknown'}"
+                    f" evolve={a.evolve_requested}{comment}"
+                )
         return "\n\n".join(lines)
 
     def latest_experience(self) -> str:

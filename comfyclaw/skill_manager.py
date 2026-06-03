@@ -539,6 +539,53 @@ class SkillsRegistry:
         path.write_text(new_content, encoding="utf-8")
         self.reload()
 
+    def upsert_user_skill(
+        self,
+        name: str,
+        description: str,
+        body: str,
+        *,
+        origin: str = "self-evolution",
+    ) -> str:
+        """Create or replace a user skill.
+
+        Built-in skills are not edited in-place. If *name* matches a built-in
+        skill, this writes a user-root override with the same name, preserving
+        the registry's normal "later roots override earlier roots" semantics.
+        """
+        if not _is_valid_skill_name(name):
+            raise ValueError(f"invalid skill name: {name!r}")
+        description = str(description or "").strip()
+        body = str(body or "").strip()
+        if not description:
+            raise ValueError("skill description is required")
+        if not body:
+            raise ValueError("skill body is required")
+
+        target = self._user_root / name
+        target.mkdir(parents=True, exist_ok=True)
+        skill_md = target / "SKILL.md"
+        frontmatter = yaml.safe_dump(
+            {
+                "name": name,
+                "description": description,
+                "metadata": {"source": "self-evolution"},
+            },
+            sort_keys=False,
+            allow_unicode=False,
+        )
+        content = f"---\n{frontmatter}---\n\n{body.rstrip()}\n"
+        skill_md.write_text(content, encoding="utf-8")
+        self._state[name] = {
+            "enabled": True,
+            "source": "self-evolution",
+            "imported_at": time.time(),
+            "origin": origin,
+        }
+        self._save_state()
+        self.reload()
+        return name
+
     # ------------------------------------------------------------------
     # Diagnostics
     # ------------------------------------------------------------------

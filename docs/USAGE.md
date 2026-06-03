@@ -89,6 +89,30 @@ Important controls:
 | Co-pilot | VLM verifier plus human accept/override |
 | Build workflow only | Dry-run: update graph but skip image generation |
 
+## Feedback and Skill Evolution
+
+After a verified generation, the panel can open a feedback dialog. Use
+thumbs-up for a good case, thumbs-down for a bad case, and add a short comment
+with the visual qualities to preserve or the failure to avoid.
+
+Leave **Use this feedback for skill evolution** checked when the example should
+teach future runs. Good cases are summarized into reusable workflow/prompt
+tactics; bad cases are summarized into failure modes and repair protocols. If
+ComfyClaw finds a reusable lesson, it proposes a new user skill or an update to
+an existing one and asks before applying it.
+
+For unattended experiments:
+
+```bash
+uv run comfyclaw run --prompt "..." --auto-apply-skill-evolution
+```
+
+To disable this post-run reflection:
+
+```bash
+uv run comfyclaw run --prompt "..." --no-skill-evolution
+```
+
 ## CLI Usage
 
 ```bash

@@ -60,6 +60,7 @@ class VerifierResult:
     overall_assessment: str = ""
     evolution_suggestions: list[str] = field(default_factory=list)
     feedback_source: str = "vlm"  # "vlm", "human", or "hybrid"
+    human_feedback: dict = field(default_factory=dict)
 
     def format_feedback(self) -> str:
         lines = [f"Overall score: {self.score:.2f}  |  {self.overall_assessment}"]

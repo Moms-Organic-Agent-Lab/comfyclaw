@@ -397,3 +397,23 @@ class TestConnStateCheckpoints:
     def test_restore_missing_returns_none(self):
         conn = _ConnState(ws=MagicMock())
         assert conn.restore_checkpoint("nope") is None
+
+
+# ---------------------------------------------------------------------------
+# Skill evolution approval
+# ---------------------------------------------------------------------------
+
+
+class TestSkillEvolutionApproval:
+    async def test_apply_skill_evolution_resolves_pending_future(self):
+        import asyncio
+
+        srv = _make_server()
+        ws, conn = _register_conn(srv)
+        fut = asyncio.get_running_loop().create_future()
+        conn.skill_evolution_fut = fut
+
+        await srv._dispatch(ws, conn, {"type": "apply_skill_evolution", "approved": True})
+
+        assert fut.done()
+        assert fut.result()["approved"] is True
