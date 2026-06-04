@@ -180,7 +180,10 @@ def get_backend(
     elif name in ("codex", "openai-codex"):
         from .codex_backend import CodexBackend
 
-        be = CodexBackend(model=model or extra.get("model", ""))
+        be = CodexBackend(
+            model=model or extra.get("model", ""),
+            session_key=str(extra.get("session_id") or ""),
+        )
         if be.is_available():
             _check_cli_auth("codex")
             return be

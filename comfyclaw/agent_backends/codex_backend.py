@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -38,6 +39,12 @@ from . import _stream_session
 from .base import DispatchFn, EventFn
 
 _CODEX_BIN_ENV = "COMFYCLAW_CODEX_BIN"
+_UUID_RE = re.compile(
+    r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+)
+_CODEX_SESSION_BY_KEY: dict[str, str] = {}
+_CODEX_SESSION_LOCK = threading.Lock()
 
 
 def _codex_bin() -> str:
@@ -98,13 +105,68 @@ def _is_turn_failure(line: str) -> tuple[bool, str]:
     return True, str(err)
 
 
+def _extract_codex_session_id(line: str) -> str:
+    """Best-effort extraction of Codex's persisted conversation id."""
+    line = line.strip()
+    if not line.startswith("{"):
+        return ""
+    try:
+        evt = json.loads(line)
+    except json.JSONDecodeError:
+        return ""
+
+    direct_keys = (
+        "session_id",
+        "conversation_id",
+        "thread_id",
+        "rollout_id",
+    )
+    stack = [evt]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, dict):
+            for key in direct_keys:
+                val = cur.get(key)
+                if isinstance(val, str):
+                    m = _UUID_RE.search(val)
+                    if m:
+                        return m.group(0)
+            for parent_key in ("session", "conversation", "thread"):
+                nested = cur.get(parent_key)
+                if isinstance(nested, dict):
+                    val = nested.get("id")
+                    if isinstance(val, str):
+                        m = _UUID_RE.search(val)
+                        if m:
+                            return m.group(0)
+            stack.extend(cur.values())
+        elif isinstance(cur, list):
+            stack.extend(cur)
+    return ""
+
+
+def _get_recorded_codex_session(session_key: str) -> str:
+    if not session_key:
+        return ""
+    with _CODEX_SESSION_LOCK:
+        return _CODEX_SESSION_BY_KEY.get(session_key, "")
+
+
+def _record_codex_session(session_key: str, codex_session_id: str) -> None:
+    if not session_key or not codex_session_id:
+        return
+    with _CODEX_SESSION_LOCK:
+        _CODEX_SESSION_BY_KEY[session_key] = codex_session_id
+
+
 class CodexBackend:
     """Run the agent through the Codex CLI's headless ``exec`` mode."""
 
     name = "codex"
 
-    def __init__(self, model: str = "") -> None:
+    def __init__(self, model: str = "", session_key: str = "") -> None:
         self.model = model
+        self.session_key = session_key
         self._bin = _codex_bin()
 
     def is_available(self) -> bool:
@@ -132,7 +194,7 @@ class CodexBackend:
         #                             codex only needs to emit text)
         # ``codex exec`` already implies a non-interactive ``approvalPolicy:
         # never``, so no explicit flag for that.
-        base_argv: list[str] = [
+        exec_argv: list[str] = [
             bin_path,
             "exec",
             "--json",
@@ -150,7 +212,23 @@ class CodexBackend:
         from comfyclaw.chat_agent import _codex_pick_model
 
         codex_model = _codex_pick_model(self.model)
-        base_argv += ["-c", f'model="{codex_model}"']
+        exec_argv += ["-c", f'model="{codex_model}"']
+
+        def _argv_for_prompt(prompt: str) -> list[str]:
+            codex_session_id = _get_recorded_codex_session(self.session_key)
+            if codex_session_id:
+                return [
+                    bin_path,
+                    "exec",
+                    "resume",
+                    "--json",
+                    "--skip-git-repo-check",
+                    "-c",
+                    f'model="{codex_model}"',
+                    codex_session_id,
+                    prompt,
+                ]
+            return exec_argv + [prompt]
 
         # Mute codex's internal log surfaces — these otherwise leak into
         # the user's agent log as scary "ERROR codex_core::session:
@@ -164,7 +242,7 @@ class CodexBackend:
         }
 
         def _invoke(prompt: str) -> str:
-            argv = base_argv + [prompt]
+            argv = _argv_for_prompt(prompt)
             try:
                 proc = subprocess.Popen(
                     argv,
@@ -214,6 +292,9 @@ class CodexBackend:
                     if failed:
                         turn_error = err
                         continue
+                    codex_session_id = _extract_codex_session_id(line)
+                    if codex_session_id:
+                        _record_codex_session(self.session_key, codex_session_id)
                     text = _extract_agent_message_text(line)
                     if not text:
                         continue

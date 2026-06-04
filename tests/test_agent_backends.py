@@ -269,3 +269,24 @@ class TestCodexModelNormalisation:
 
         monkeypatch.setenv("COMFYCLAW_CODEX_MODEL", "custom-codex-model")
         assert _codex_pick_model("gpt-5.5") == "custom-codex-model"
+
+
+class TestCodexSessionReuse:
+    def test_extracts_codex_session_id_from_events(self) -> None:
+        from comfyclaw.agent_backends.codex_backend import _extract_codex_session_id
+
+        sid = "123e4567-e89b-12d3-a456-426614174000"
+        assert _extract_codex_session_id(f'{{"type":"session.created","session_id":"{sid}"}}') == sid
+        assert _extract_codex_session_id(f'{{"thread":{{"id":"{sid}"}}}}') == sid
+
+    def test_records_codex_session_per_comfyclaw_session(self) -> None:
+        from comfyclaw.agent_backends.codex_backend import (
+            _get_recorded_codex_session,
+            _record_codex_session,
+        )
+
+        sid = "123e4567-e89b-12d3-a456-426614174000"
+        _record_codex_session("comfyclaw-session-a", sid)
+
+        assert _get_recorded_codex_session("comfyclaw-session-a") == sid
+        assert _get_recorded_codex_session("comfyclaw-session-b") == ""

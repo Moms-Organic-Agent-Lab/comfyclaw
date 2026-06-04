@@ -112,6 +112,7 @@ class HarnessConfig:
     enable_skill_evolution: bool = True
     skill_evolution_min_confidence: float = 0.55
     skill_evolution_auto_apply: bool = False
+    agent_session_id: str = ""
     """
     Pin the image-generation model (checkpoint / UNET) used by ComfyUI.
 
@@ -234,6 +235,7 @@ class ClawHarness:
             pinned_image_model=config.image_model,
             backend_name=config.agent_backend,
             api_base=config.api_base,
+            agent_session_id=config.agent_session_id,
         )
         self._agent.on_agent_event = self._on_agent_event
         self._current_iteration = 0
@@ -409,6 +411,12 @@ class ClawHarness:
                 memory_summary=memory_summary,
                 iteration=iteration,
             )
+
+            direct_answer = getattr(self._agent, "last_direct_answer", "")
+            if isinstance(direct_answer, str) and direct_answer.strip():
+                print("[ClawHarness] 💬 Agent answered without workflow changes.")
+                self._emit_status("complete", iteration, "Answered.")
+                return None
 
             node_ids_after = set(wm.workflow.keys())
             added_ids = sorted(node_ids_after - node_ids_before)

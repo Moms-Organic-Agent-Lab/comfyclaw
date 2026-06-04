@@ -303,6 +303,38 @@ const CSS = `
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
+.cc-segment-row {
+  display:flex; gap:4px;
+  background:var(--cc-bg);
+  padding:3px;
+  border-radius:10px;
+  border:1px solid var(--cc-border);
+}
+.cc-segment-btn {
+  flex:1; border:none; background:transparent;
+  color:var(--cc-fg-dim); cursor:pointer;
+  padding:7px 6px; border-radius:7px;
+  font-size:12px; font-weight:700; letter-spacing:0;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+  display:flex; align-items:center; justify-content:center; gap:5px;
+  font-family:inherit;
+  line-height:1.2;
+  min-width:0;
+}
+.cc-segment-btn:hover {
+  color:var(--cc-fg);
+  background:var(--cc-surface-tint);
+}
+.cc-segment-btn[data-active="1"] {
+  background:var(--cc-surface-2);
+  color:var(--cc-accent);
+  box-shadow:var(--cc-shadow-sm);
+}
+.cc-segment-btn:focus-visible {
+  outline:none;
+  box-shadow:0 0 0 2px var(--cc-accent-soft-2);
+}
+
 /* ── Layout helpers ───────────────────────────────────────────────────── */
 .cc-row {
   display:flex; align-items:center; gap: var(--cc-space-3);

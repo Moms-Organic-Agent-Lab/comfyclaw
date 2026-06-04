@@ -42,6 +42,18 @@ and GROW ComfyUI workflow topologies — constructing complete pipelines from
 scratch when the workflow is empty, and evolving existing ones in response to
 the verifier's region-level feedback.
 
+Unified input behavior
+----------------------
+The user has one Cursor-style input box. Decide the intent yourself:
+• If the user asks a question, asks for an explanation, wants a diagnosis, or
+  requests guidance without asking you to change/run the workflow, call
+  answer_user with a concise answer and do not modify the workflow.
+• If the user asks you to create, generate, improve, refine, fix, add, remove,
+  or otherwise change the ComfyUI result/workflow, use the workflow tools below
+  and finish with finalize_workflow.
+• If the request is ambiguous but mentions a desired image/video/result or a
+  refinement direction, prefer improving the workflow.
+
 Iteration strategy
 ------------------
 1. Call report_evolution_strategy first: state your plan and the top issue.
@@ -428,6 +440,19 @@ _TOOLS: list[dict] = [
         {"type": "object", "properties": {}, "required": []},
     ),
     _tool(
+        "answer_user",
+        (
+            "Answer the user's question directly without modifying or generating the workflow. "
+            "Use this when the user is asking for explanation, diagnosis, or guidance rather "
+            "than asking you to create, change, or run the ComfyUI workflow."
+        ),
+        {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "required": ["answer"],
+        },
+    ),
+    _tool(
         "finalize_workflow",
         "Signal that all modifications are complete. Call validate_workflow first to catch errors.",
         {
@@ -492,6 +517,7 @@ class ClawAgent:
         backend: AgentBackend | None = None,
         backend_name: str = "litellm",
         api_base: str | None = None,
+        agent_session_id: str = "",
     ) -> None:
         # Propagate the API key into the environment so LiteLLM picks it up.
         # For Anthropic keys (sk-ant-…) we set ANTHROPIC_API_KEY; for other
@@ -511,6 +537,7 @@ class ClawAgent:
         self.on_agent_event: Callable[[str, str, str, dict | None], None] | None = None
         self.max_tool_rounds = max_tool_rounds
         self.pinned_image_model = pinned_image_model
+        self.last_direct_answer = ""
 
         # Backend selection: explicit instance wins, otherwise build by name.
         if backend is not None:
@@ -521,6 +548,7 @@ class ClawAgent:
                 model=model,
                 api_key=api_key,
                 api_base=api_base,
+                extra={"session_id": agent_session_id},
             )
         self.backend_name = getattr(self.backend, "name", backend_name)
 
@@ -561,6 +589,7 @@ class ClawAgent:
         def _dispatch_call(call: ToolCall) -> tuple[str, bool]:
             return self._dispatch(call.name, call.args, workflow_manager)
 
+        self.last_direct_answer = ""
         return self.backend.run_tool_loop(
             system=system_prompt,
             user=user_content,
@@ -689,6 +718,12 @@ class ClawAgent:
                         return msg, False
                     print(f"[ClawAgent] 🎯 {inputs.get('rationale', '')}")
                     return "Workflow finalized.", True
+
+                case "answer_user":
+                    answer = str(inputs.get("answer") or "").strip()
+                    self.last_direct_answer = answer
+                    self._emit_event("assistant_done", answer or "(no answer)")
+                    return "Answered user without workflow changes.", True
 
                 case "read_skill":
                     return self._read_skill(inputs["skill_name"]), False

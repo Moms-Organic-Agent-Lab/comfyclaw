@@ -75,6 +75,10 @@ let _checkpoints = [];           // [{id, label, timestamp}]
 // ── Workflow stats ─────────────────────────────────────────────────────────────
 let _nodeCount = 0;              // live count of nodes in the current workflow
 
+function _workflowNodeCount(workflow) {
+  return workflow && typeof workflow === "object" ? Object.keys(workflow).length : 0;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Toast notification system
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1054,6 +1058,7 @@ function _mkSession(name = "", workflowId = "", sessions = []) {
     workflowId: _asStr(workflowId),  // identity string from _detectWorkflowIdentity().name
     prompt: "",
     chatHistory: [],
+    setupLocked: false,
     provider: "anthropic",
     model: "",
     createdAt: Date.now(),
@@ -1068,6 +1073,9 @@ _sessions.forEach((s, i) => {
   if (s.workflowId === undefined) s.workflowId = "";
   if (typeof s.name !== "string" || !s.name) s.name = `Session ${i + 1}`;
   if (typeof s.workflowId !== "string") s.workflowId = "";
+  if (typeof s.setupLocked !== "boolean") {
+    s.setupLocked = !!(_asStr(s.prompt).trim() || (Array.isArray(s.chatHistory) && s.chatHistory.length));
+  }
 });
 _dedupeSessionNames(_sessions);
 if (!_sessions.length) _sessions = [_mkSession("", "", _sessions)];
@@ -1080,6 +1088,44 @@ if (!_sessions.find(s => s.id === _activeSessionId)) _activeSessionId = _session
 function _activeSession() { return _sessions.find(s => s.id === _activeSessionId) || _sessions[0]; }
 
 function _persistSessions() { localStorage.setItem(_SESSION_KEY, JSON.stringify(_sessions)); }
+
+function _lockActiveSessionSetup() {
+  const sess = _activeSession();
+  if (!sess || sess.setupLocked) return;
+  sess.setupLocked = true;
+  _persistSessions();
+  _syncSessionSetupUI();
+}
+
+function _syncSessionSetupUI() {
+  const panel = _clawPanel;
+  const sess = _activeSession();
+  if (!panel || !sess) return;
+
+  const genBody = panel.querySelector("#comfyclaw-gen-body");
+  const ctrlToggle = panel.querySelector("#comfyclaw-ctrl-toggle");
+  const setup = panel.querySelector("#cc-session-setup");
+  const chatInput = panel.querySelector("#comfyclaw-think-input");
+  const sendBtn = panel.querySelector("#comfyclaw-think-send");
+  const setupLocked = !!sess.setupLocked;
+
+  if (genBody) {
+    genBody.style.display = setupLocked ? "none" : "";
+  }
+  if (ctrlToggle) {
+    ctrlToggle.style.transform = setupLocked ? "rotate(-90deg)" : "rotate(0deg)";
+    ctrlToggle.title = setupLocked ? "Edit session setup" : "Lock and hide setup";
+  }
+  if (setup) {
+    setup.dataset.locked = setupLocked ? "1" : "0";
+  }
+  if (chatInput && !_isGenerating) {
+    chatInput.placeholder = "Ask, refine, or describe what to generate…";
+  }
+  if (sendBtn) {
+    sendBtn.title = "Send to ComfyClaw (Enter)";
+  }
+}
 
 function _requestCheckpointsForActiveSession() {
   _checkpoints = [];
@@ -1125,6 +1171,7 @@ function _applySession(sessionId) {
     });
   }
   _requestCheckpointsForActiveSession();
+  _syncSessionSetupUI();
 }
 
 function _switchSession(id) {
@@ -1152,6 +1199,7 @@ function _newSession(nameHint = "") {
   _setActiveProvider("anthropic", false);
   _renderSessionTabs();
   _requestCheckpointsForActiveSession();
+  _syncSessionSetupUI();
 }
 
 /**
@@ -3002,6 +3050,25 @@ function createComfyClawPanel() {
     <div id="comfyclaw-gen-body"
          style="padding:12px 14px 10px; flex-shrink:0;
                 max-height:380px; overflow-y:auto;">
+      <div id="cc-session-setup"
+           style="display:flex; flex-direction:column; gap:8px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+          <span class="cc-label" style="margin:0;">Session Setup</span>
+          <span class="cc-pill">Agent Session</span>
+        </div>
+        <div id="cc-session-strategy-toggle" class="cc-segment-row" role="group"
+             aria-label="Build strategy">
+          <button type="button" class="cc-segment-btn" data-mode="scratch"
+                  title="Build a workflow from scratch">
+            <span>✨</span><span>Scratch</span>
+          </button>
+          <button type="button" class="cc-segment-btn" data-mode="improve"
+                  title="Improve the current workflow">
+            <span>🔧</span><span>Improve</span>
+          </button>
+        </div>
+      </div>
+
       <!-- Prompt textarea + quick prompts are hidden: the composer below is
            the single prompt input. Kept in DOM so legacy reads still work. -->
       <textarea id="comfyclaw-gen-prompt" class="cc-textarea" rows="3"
@@ -3009,7 +3076,7 @@ function createComfyClawPanel() {
         style="display:none;"></textarea>
       <div id="cc-quick-prompts" style="display:none;"></div>
 
-      <!-- Hidden strategy buttons — the composer's strategy chip drives selection. -->
+      <!-- Hidden strategy buttons — the session setup segmented control drives selection. -->
       <div id="comfyclaw-gen-mode" style="display:none;">
         <button data-mode="scratch" class="comfyclaw-mode-btn"></button>
         <button data-mode="improve" class="comfyclaw-mode-btn"></button>
@@ -3174,7 +3241,7 @@ function createComfyClawPanel() {
           <div id="cc-composer-progress" class="cc-progress cc-composer-progress"
                style="display:none;"><div class="cc-progress-bar"></div></div>
           <textarea id="comfyclaw-think-input" rows="1"
-            placeholder="Ask ComfyClaw, or describe what to generate…"></textarea>
+            placeholder="Ask, refine, or describe what to generate…"></textarea>
           <div id="cc-composer-status" class="cc-composer-status" style="display:none;">
             <span id="cc-composer-status-text"></span>
             <span id="cc-composer-timer" class="cc-pill cc-pill-mono" style="display:none;">0:00</span>
@@ -3192,19 +3259,7 @@ function createComfyClawPanel() {
               <span class="cc-chip-label">Server default</span>
               <span class="cc-chip-chev">▾</span>
             </button>
-            <button id="cc-composer-strategy-chip" class="cc-composer-chip"
-                    title="Click to toggle build strategy">
-              <span class="cc-chip-icon">✨</span>
-              <span class="cc-chip-label">Scratch</span>
-            </button>
-            <button id="cc-composer-audit" class="cc-composer-btn"
-                    title="Audit current workflow">🔍</button>
             <div style="flex:1;"></div>
-            <button id="cc-composer-run" class="cc-composer-btn cc-composer-btn-run"
-                    title="Run generation with this prompt">▶</button>
-            <button id="cc-composer-stop" class="cc-composer-btn cc-composer-btn-stop"
-                    title="Stop generation"
-                    style="display:none;">■</button>
             <button id="comfyclaw-think-send" class="cc-composer-btn cc-composer-btn-primary"
                     title="Send to ComfyClaw (Enter)">↑</button>
           </div>
@@ -3346,7 +3401,9 @@ function createComfyClawPanel() {
 
   // ── Strategy toggle (✨ From Scratch / 🔧 Improve) ───────────────────────────
   let selectedMode = "scratch";
+  let strategyTouched = false;
   const modeContainer = panel.querySelector("#comfyclaw-gen-mode");
+  const setupStrategy = panel.querySelector("#cc-session-strategy-toggle");
   function _paintStrategyButtons() {
     modeContainer.querySelectorAll(".comfyclaw-mode-btn").forEach((b) => {
       const active = b.dataset.mode === selectedMode;
@@ -3354,11 +3411,20 @@ function createComfyClawPanel() {
       b.style.background = active ? "rgba(203,166,247,0.13)" : "var(--cc-surface-2)";
       b.style.color = active ? "var(--cc-accent)" : "var(--cc-fg)";
     });
+    setupStrategy?.querySelectorAll("button[data-mode]").forEach((b) => {
+      b.dataset.active = b.dataset.mode === selectedMode ? "1" : "0";
+    });
   }
   modeContainer.querySelectorAll(".comfyclaw-mode-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       selectedMode = btn.dataset.mode;
       _paintStrategyButtons();
+    });
+  });
+  setupStrategy?.querySelectorAll("button[data-mode]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      strategyTouched = true;
+      panel.querySelector(`#comfyclaw-gen-mode [data-mode="${btn.dataset.mode}"]`)?.click();
     });
   });
   _paintStrategyButtons();
@@ -3383,29 +3449,18 @@ function createComfyClawPanel() {
   });
 
   // ── Controls toggle (▾ button in header) ─────────────────────────────────────
-  // The button always shows "▾" and we rotate it 180° when collapsed so the
+  // The button always shows "▾" and rotates when collapsed so the
   // affordance reads as a single chevron flipping, not a glyph swap.
-  const ctrlSection = panel.querySelector("#comfyclaw-gen-body");
   const ctrlToggle = panel.querySelector("#comfyclaw-ctrl-toggle");
-  let ctrlCollapsed = false;
-  function _paintCtrl() {
-    ctrlSection.style.display = ctrlCollapsed ? "none" : "";
-    ctrlToggle.style.transform = ctrlCollapsed ? "rotate(-90deg)" : "rotate(0deg)";
-    ctrlToggle.title = ctrlCollapsed ? "Expand controls" : "Collapse controls";
-  }
   ctrlToggle.addEventListener("click", (e) => {
     e.stopPropagation();
-    ctrlCollapsed = !ctrlCollapsed;
-    _paintCtrl();
-    localStorage.setItem("comfyclaw_ctrl_collapsed", ctrlCollapsed ? "1" : "0");
+    const sess = _activeSession();
+    if (!sess) return;
+    sess.setupLocked = !sess.setupLocked;
+    _persistSessions();
+    _syncSessionSetupUI();
   });
-  // New default: collapsed (composer is the primary surface). Existing users
-  // who already have a preference saved keep their choice.
-  const _savedCtrl = localStorage.getItem("comfyclaw_ctrl_collapsed");
-  if (_savedCtrl === "1" || _savedCtrl === null) {
-    ctrlCollapsed = true;
-  }
-  _paintCtrl();
+  _syncSessionSetupUI();
 
   // ── Theme (light / dark) ────────────────────────────────────────────────────
   const themeBtn = panel.querySelector("#comfyclaw-theme-btn");
@@ -3642,8 +3697,10 @@ function createComfyClawPanel() {
       setGenStatus("idle", "Backend not connected — start `comfyclaw serve`.");
       return;
     }
-    let workflow = selectedMode === "improve" ? await exportCurrentWorkflow() : null;
-    const cpWf = workflow || await exportCurrentWorkflow();
+    _lockActiveSessionSetup();
+    const exportedWorkflow = await exportCurrentWorkflow();
+    let workflow = selectedMode === "improve" ? exportedWorkflow : null;
+    const cpWf = exportedWorkflow;
     if (cpWf && Object.keys(cpWf).length > 0)
       _activeSyncClient.ws.send(JSON.stringify({
         type: "save_checkpoint",
@@ -3673,8 +3730,10 @@ function createComfyClawPanel() {
     _activeSyncClient.ws.send(JSON.stringify({
       type: "trigger_generation",
       connection_id: _CONNECTION_ID,
+      session_id: _activeSessionId,
       prompt, mode: selectedMode, workflow,
       settings: {
+        session_id: _activeSessionId,
         iterations: runMode === "manual" ? 1 :
           (parseInt(panel.querySelector("#comfyclaw-gen-iters").value) || 3),
         mode: runMode,
@@ -3845,10 +3904,28 @@ function createComfyClawPanel() {
     await _appendImageFiles(files);
   });
 
-  function sendFromPanel() {
+  async function sendFromPanel() {
     const text = chatInput.value.trim();
     if (!text || _chatStreaming) return;
     if (_activeSyncClient?.ws?.readyState !== WebSocket.OPEN) return;
+
+    if (!_isGenerating) {
+      const canvasWorkflow = await exportCurrentWorkflow();
+      const promptEl = panel.querySelector("#comfyclaw-gen-prompt");
+      if (promptEl) {
+        promptEl.value = text;
+        promptEl.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      chatInput.value = "";
+      chatInput.style.height = "auto";
+      if (_activeSession()?.setupLocked || _nodeCount > 0 || (!strategyTouched && _workflowNodeCount(canvasWorkflow) > 0)) {
+        panel.querySelector('#comfyclaw-gen-mode [data-mode="improve"]')?.click();
+      }
+      panel.querySelector("#comfyclaw-gen-btn")?.click();
+      return;
+    }
+
+    _lockActiveSessionSetup();
     appendAgentLog({ event_type: "user", content: text, timestamp: Date.now() / 1000 });
     chatInput.value = "";
     // Auto-resize back
@@ -3872,6 +3949,8 @@ function createComfyClawPanel() {
       _activeSyncClient.ws.send(JSON.stringify({
         type: "chat_message",
         message_id: msgId,
+        session_id: _activeSessionId,
+        workflow: await exportCurrentWorkflow(),
         messages: _chatHistory,
         images: _chatImageAttachments,
         model: _model,
@@ -5104,52 +5183,6 @@ function createComfyClawPanel() {
     openRelogin: (id) => _openSignInModal(id, { force: true }),
   };
 
-  // ── Composer Run button (uses chat input as generation prompt) ─────────────
-  const composerRun = panel.querySelector("#cc-composer-run");
-  composerRun?.addEventListener("click", () => {
-    const text = chatInput.value.trim();
-    if (!text) { chatInput.focus(); return; }
-    const gp = panel.querySelector("#comfyclaw-gen-prompt");
-    if (gp) {
-      gp.value = text;
-      gp.dispatchEvent(new Event("input", { bubbles: true }));
-    }
-    chatInput.value = "";
-    chatInput.style.height = "auto";
-    panel.querySelector("#comfyclaw-gen-btn")?.click();
-  });
-
-  // ── Composer Stop button (cancels in-flight generation) ────────────────────
-  panel.querySelector("#cc-composer-stop")?.addEventListener("click", () => {
-    panel.querySelector("#comfyclaw-gen-stop")?.click();
-  });
-
-  // ── Composer Audit button (debug the current workflow) ─────────────────────
-  panel.querySelector("#cc-composer-audit")?.addEventListener("click", () => {
-    panel.querySelector("#comfyclaw-debug-btn")?.click();
-  });
-
-  // ── Composer Strategy chip — cycles Scratch / Improve, mirrors hidden btns ─
-  const stratChip = panel.querySelector("#cc-composer-strategy-chip");
-  const stratLabel = stratChip?.querySelector(".cc-chip-label");
-  const stratIcon = stratChip?.querySelector(".cc-chip-icon");
-  function _refreshStrategyChip() {
-    const mode = stratChip?.dataset.mode || "scratch";
-    if (stratIcon) stratIcon.textContent = mode === "improve" ? "🔧" : "✨";
-    if (stratLabel) stratLabel.textContent = mode === "improve" ? "Improve" : "Scratch";
-  }
-  if (stratChip) {
-    stratChip.dataset.mode = "scratch";
-    stratChip.addEventListener("click", () => {
-      const next = stratChip.dataset.mode === "scratch" ? "improve" : "scratch";
-      stratChip.dataset.mode = next;
-      // Drive the hidden mode buttons that the existing flow reads.
-      panel.querySelector(`#comfyclaw-gen-mode [data-mode="${next}"]`)?.click();
-      _refreshStrategyChip();
-    });
-    _refreshStrategyChip();
-  }
-
   // ── Textarea focus highlight (uses CSS via .cc-textarea/.cc-input) ────────
   // The `:focus` styles in styles.js already raise a soft purple ring; no
   // imperative JS needed beyond the default behaviour.
@@ -5273,7 +5306,7 @@ function _augmentPanelWithTabs(panel) {
     onReusePrompt: (text) => {
       if (!text) return;
       // Drop the prompt back into the Generate tab textarea, switch to it,
-      // and focus the field so the user can edit + click Generate.
+      // and focus the field so the user can edit + send.
       const ta = panel.querySelector("#comfyclaw-gen-prompt");
       if (ta) {
         ta.value = text;
@@ -5407,12 +5440,14 @@ function _augmentPanelWithTabs(panel) {
     // Modality toggle (Image / Video) sits ABOVE the mode toggle.
     const modalityToggle = createModalityToggle();
     _modalityToggleRef = modalityToggle;
+    modalityToggle.root.id = "cc-session-modality-toggle";
     legacyModeRow.parentElement.insertBefore(modalityToggle.root, legacyModeRow);
 
     const modeToggle = createModeToggle({
       onChange: _applyModeToAdvanced,
     });
     _modeToggleRef = modeToggle;
+    modeToggle.root.id = "cc-session-mode-toggle";
     legacyModeRow.parentElement.insertBefore(modeToggle.root, legacyModeRow);
     // Apply once at startup so the saved mode's relationship to Advanced is
     // reflected before the user touches anything. Defer one tick so the
@@ -5507,15 +5542,11 @@ function setGenRunning(running) {
   const stopBtn = _clawPanel.querySelector("#comfyclaw-gen-stop");
   const debugBtn = _clawPanel.querySelector("#comfyclaw-debug-btn");
   const progEl = _clawPanel.querySelector("#cc-gen-progress");
-  const compRun = _clawPanel.querySelector("#cc-composer-run");
-  const compStop = _clawPanel.querySelector("#cc-composer-stop");
-  const compAud = _clawPanel.querySelector("#cc-composer-audit");
   const compProg = _clawPanel.querySelector("#cc-composer-progress");
+  const compSend = _clawPanel.querySelector("#comfyclaw-think-send");
   genBtn.style.display = running ? "none" : "";
   stopBtn.style.display = running ? "" : "none";
-  if (compRun) compRun.style.display = running ? "none" : "";
-  if (compStop) compStop.style.display = running ? "" : "none";
-  if (compAud) compAud.disabled = running;
+  if (compSend) compSend.disabled = false;
   if (debugBtn) debugBtn.disabled = running;
   if (progEl) progEl.style.display = running ? "block" : "none";
   if (compProg) compProg.style.display = running ? "block" : "none";
@@ -5549,9 +5580,11 @@ function setGenRunning(running) {
   }
 
   const chatInput = document.getElementById("comfyclaw-think-input");
-  if (chatInput) chatInput.placeholder = running
-    ? "Send the agent a hint or correction…"
-    : "Chat with ComfyClaw about your workflow…";
+  if (chatInput) {
+    chatInput.placeholder = running
+      ? "Send the agent a hint or correction…"
+      : "Ask, refine, or describe what to generate…";
+  }
 }
 
 function setGenStatus(state, text) {
@@ -5730,9 +5763,7 @@ function clearAgentLog() {
            style="user-select:none;">
         <div class="cc-empty-icon">💬</div>
         <div class="cc-empty-title">Ready when you are.</div>
-        <div>Ask about your workflow, or click
-          <strong style="color:var(--cc-accent-green);">▶ Generate</strong>
-          to start building.</div>
+        <div>Ask about your workflow, or send a prompt to start building.</div>
       </div>
     `;
   }
@@ -5883,6 +5914,15 @@ class SyncClient {
       setGenRunning(false);
       const elapsed = _genStartTime ? Math.round((Date.now() - _genStartTime) / 1000) : 0;
       const elapsedStr = elapsed > 0 ? ` · ${elapsed}s` : "";
+      if (msg.answer) {
+        setGenStatus("complete", `Answered${elapsedStr}`);
+        appendAgentLog({
+          event_type: "assistant_done",
+          content: msg.answer,
+          timestamp: Date.now() / 1000,
+        });
+        return;
+      }
       // Distinguish a dry-run (no image returned) from a real completion.
       const isDryRun = _lastGenState === "dry_run"
         || (!msg.image && (!msg.images || msg.images.length === 0));
@@ -6212,7 +6252,7 @@ function createChatPanel() {
   });
 
   // ── Send on click ────────────────────────────────────────────────────────
-  const sendMsg = () => {
+  const sendMsg = async () => {
     const input = panel.querySelector("#comfyclaw-chat-input");
     const text = input.value.trim();
     if (!text || _chatStreaming) return;
@@ -6242,6 +6282,8 @@ function createChatPanel() {
     _activeSyncClient.ws.send(JSON.stringify({
       type: "chat_message",
       message_id: msgId,
+      session_id: _activeSessionId,
+      workflow: await exportCurrentWorkflow(),
       messages: _chatHistory,
       images: _chatImageAttachments,
       model: _fmodel,
@@ -6572,6 +6614,7 @@ app.registerExtension({
     console.log(`[ComfyClaw] Extension loaded — ComfyClaw Sync Bridge v8.0 · connection_id=${_CONNECTION_ID} · Ctrl/Cmd+Shift+Space to toggle panel`);
     statusEl = createStatusBadge();
     _clawPanel = _thinkingPanel = createComfyClawPanel();
+    _syncSessionSetupUI();
     _registerComfyUISidebarTab().then((ok) => {
       // If registration failed and the user had `comfy-sidebar` saved,
       // demote to `sidebar` so the panel still has a usable home.
@@ -6595,8 +6638,7 @@ app.registerExtension({
       // doesn't fire before the user can act on it.
       setTimeout(() => {
         showToast(
-          "🐾 Welcome to ComfyClaw. Type a prompt and click ▶ Generate, " +
-          "or open the Skills tab to see what the agent already knows.",
+          "🐾 Welcome to ComfyClaw. Ask, refine, or describe what to generate, then press ↑.",
           "info",
           8000
         );

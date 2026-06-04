@@ -595,6 +595,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
             mode = trigger.get("mode", "scratch")
             settings = trigger.get("settings") or {}
+            session_id = str(trigger.get("session_id") or settings.get("session_id") or "")
             workflow = trigger.get("workflow") if mode == "improve" else {}
             if workflow is None:
                 workflow = {}
@@ -645,6 +646,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 run_cfg["verifier_model"] = trigger_verifier_model
             if trigger_backend:
                 run_cfg["agent_backend"] = trigger_backend
+            run_cfg["agent_session_id"] = session_id
 
             # Never route provider API credentials into CLI backends
             # (claude-code / codex / gemini-cli). Those backends must use
@@ -745,7 +747,16 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                         target_ws=source_ws,
                     )
 
-                if result_data:
+                direct_answer = getattr(harness._agent, "last_direct_answer", "")
+                if isinstance(direct_answer, str) and direct_answer.strip():
+                    sync.send_complete(
+                        score=0.0,
+                        iterations_used=0,
+                        image_path="",
+                        target_ws=source_ws,
+                        answer=direct_answer,
+                    )
+                elif result_data:
                     out_dir = (
                         Path(args.output_dir)
                         if args.output_dir

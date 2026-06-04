@@ -387,7 +387,12 @@ class SyncServer:
         )
 
     def send_complete(
-        self, score: float, iterations_used: int, image_path: str = "", target_ws: Any = None
+        self,
+        score: float,
+        iterations_used: int,
+        image_path: str = "",
+        target_ws: Any = None,
+        answer: str = "",
     ) -> None:
         self._send_json(
             {
@@ -395,6 +400,7 @@ class SyncServer:
                 "score": score,
                 "iterations_used": iterations_used,
                 "image_path": image_path,
+                "answer": answer,
             },
             target_ws=target_ws,
         )
@@ -1330,9 +1336,12 @@ class SyncServer:
 
         with self._conns_lock:
             conn = self._conns.get(websocket)
-        workflow = copy.deepcopy(conn.workflow) if conn and conn.workflow else None
+        workflow = msg.get("workflow")
+        if not isinstance(workflow, dict) or not workflow:
+            workflow = copy.deepcopy(conn.workflow) if conn and conn.workflow else None
 
         message_id: str = msg.get("message_id", "")
+        session_id: str = str(msg.get("session_id") or "")
         messages: list = msg.get("messages", [])
         images: list = msg.get("images", [])
         model: str = (msg.get("model") or "").strip() or self._model
@@ -1359,6 +1368,7 @@ class SyncServer:
                 api_base,
                 agent_backend=agent_backend,
                 images=images,
+                session_id=session_id,
             ):
                 await websocket.send(
                     json.dumps(

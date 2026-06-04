@@ -111,6 +111,7 @@ async def chat_stream(
     api_base: str | None = None,
     agent_backend: str = "litellm",
     images: list[dict] | None = None,
+    session_id: str = "",
 ) -> AsyncGenerator[str, None]:
     """Stream chat tokens from the selected backend.
 
@@ -142,7 +143,7 @@ async def chat_stream(
             yield "⚠️  Image attachments are currently supported in API mode (LiteLLM) only. "
             yield "Switch Access to API to run vision chat."
             return
-        async for tok in _codex_chat_stream(messages, workflow, model):
+        async for tok in _codex_chat_stream(messages, workflow, model, session_id=session_id):
             yield tok
         return
     if backend in ("gemini-cli", "gemini"):
@@ -601,6 +602,7 @@ async def _codex_chat_stream(
     messages: list[dict],
     workflow: dict | None,
     model: str,
+    session_id: str = "",
 ) -> AsyncGenerator[str, None]:
     """Drive ``codex exec --json`` for a single chat reply.
 
@@ -657,7 +659,27 @@ async def _codex_chat_stream(
     # ``~/.codex/config.toml`` without mutating that file.
     codex_model = _codex_pick_model(model)
     argv += ["-c", f'model="{codex_model}"']
-    argv.append(prompt)
+    from .agent_backends.codex_backend import (
+        _extract_codex_session_id,
+        _get_recorded_codex_session,
+        _record_codex_session,
+    )
+
+    codex_session_id = _get_recorded_codex_session(session_id)
+    if codex_session_id:
+        argv = [
+            binary,
+            "exec",
+            "resume",
+            "--json",
+            "--skip-git-repo-check",
+            "-c",
+            f'model="{codex_model}"',
+            codex_session_id,
+            prompt,
+        ]
+    else:
+        argv.append(prompt)
 
     # Mute the noisy log sources at three layers:
     #   - RUST_LOG=off       Rust tracing (e.g. the "failed to record
@@ -720,6 +742,9 @@ async def _codex_chat_stream(
                 evt = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            new_session_id = _extract_codex_session_id(line)
+            if new_session_id:
+                _record_codex_session(session_id, new_session_id)
             kind, item_id, text = _codex_extract_event(evt)
             if kind == "ignore" or not text:
                 continue
