@@ -305,6 +305,7 @@ class ClawHarness:
             backend_name=config.agent_backend,
             api_base=config.api_base,
             agent_session_id=config.agent_session_id,
+            model_download_callback=self._request_model_download,
         )
         self._agent.on_agent_event = self._on_agent_event
         self._current_iteration = 0
@@ -918,6 +919,14 @@ class ClawHarness:
                 tool_args=tool_args,
                 target_ws=getattr(self, "_sync_ws", None),
             )
+
+    def _request_model_download(self, request: dict) -> dict:
+        if not self._sync:
+            return {"approved": False, "reason": "No ComfyClaw panel is connected."}
+        return self._sync.request_model_download(
+            request,
+            target_ws=getattr(self, "_sync_ws", None),
+        )
 
     def _build_repair_feedback(
         self, error_msg: str | None, last_result: VerifierResult | None

@@ -60,6 +60,7 @@ Message types (client → server):
                               runs ``<binary> logout`` first (re-login).
   backend_auth_paste_code  — forward the redirect URL into claude's stdin
   backend_auth_cancel
+  model_url_download       — download a pasted model URL into ComfyUI/models
 
 Additional message types (server → client):
   agent_backends           — backend availability (with state per backend)
@@ -144,6 +145,7 @@ class _ConnState:
     feedback_fut: Any = None  # asyncio.Future[dict] | None
     refinement_fut: Any = None  # asyncio.Future[dict] | None
     skill_evolution_fut: Any = None  # asyncio.Future[dict] | None
+    model_download_fut: Any = None  # asyncio.Future[dict] | None
 
     # ── Run-mode early-stop (accept_now) ──────────────────────────────────────
     accept_now: threading.Event = field(default_factory=threading.Event)
@@ -472,6 +474,54 @@ class SyncServer:
             return bool(fut.result(timeout=timeout + 5.0))
         except Exception:
             return False
+
+    def request_model_download(
+        self,
+        request: dict,
+        target_ws: Any = None,
+        timeout: float = 600.0,
+    ) -> dict:
+        """Ask one ComfyUI tab whether the agent may download model weights."""
+        if not self._loop or not self.is_running():
+            return {"approved": False, "reason": "No connected ComfyClaw panel."}
+
+        async def _ask() -> dict:
+            with self._conns_lock:
+                ws = (
+                    target_ws
+                    if target_ws and target_ws in self._conns
+                    else next(iter(self._conns.keys()), None)
+                )
+                conn = self._conns.get(ws) if ws else None
+            if ws is None or conn is None:
+                return {"approved": False, "reason": "No connected ComfyClaw panel."}
+            fut = self._loop.create_future()  # type: ignore[union-attr]
+            if conn.model_download_fut and not conn.model_download_fut.done():
+                conn.model_download_fut.cancel()
+            conn.model_download_fut = fut
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "model_download_request",
+                        "request": request,
+                    }
+                )
+            )
+            try:
+                reply = await asyncio.wait_for(fut, timeout=timeout)
+            finally:
+                conn.model_download_fut = None
+            return dict(reply or {})
+
+        fut = asyncio.run_coroutine_threadsafe(_ask(), self._loop)
+        try:
+            reply = fut.result(timeout=timeout + 5.0)
+            return {
+                "approved": bool(reply.get("approved")),
+                "reason": str(reply.get("reason") or ""),
+            }
+        except Exception as exc:
+            return {"approved": False, "reason": f"Timed out waiting for approval: {exc}"}
 
     # ── trigger queue (serve loop) ───────────────────────────────────────────
 
@@ -1077,6 +1127,58 @@ class SyncServer:
 
         asyncio.ensure_future(run_downloads())
 
+    async def _handle_model_url_download(self, ws: Any, msg: dict) -> None:
+        from .model_bundles import download_model_from_url
+
+        url = str(msg.get("url") or "").strip()
+        dest_subdir = str(msg.get("dest_subdir") or "checkpoints").strip()
+        filename = str(msg.get("filename") or "").strip() or None
+        comfyui_dir = self._comfyui_dir()
+
+        async def send(msg_out: dict) -> None:
+            await ws.send(json.dumps(msg_out))
+
+        async def run_download() -> None:
+            await send(
+                {
+                    "type": "model_url_download_progress",
+                    "state": "downloading",
+                    "url": url,
+                    "dest_subdir": dest_subdir,
+                }
+            )
+            try:
+                loop = asyncio.get_running_loop()
+                target = await loop.run_in_executor(
+                    None,
+                    lambda: download_model_from_url(
+                        url=url,
+                        comfyui_dir=comfyui_dir,
+                        dest_subdir=dest_subdir,
+                        filename=filename,
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001
+                await send(
+                    {
+                        "type": "model_url_download_complete",
+                        "success": False,
+                        "error": str(exc),
+                        "url": url,
+                    }
+                )
+                return
+            await send(
+                {
+                    "type": "model_url_download_complete",
+                    "success": True,
+                    "target": str(target),
+                    "detail": "Download complete. Restart ComfyUI so model dropdowns refresh.",
+                }
+            )
+
+        asyncio.ensure_future(run_download())
+
     async def _handle_backend_install_start(self, ws: Any, msg: dict) -> None:
         from .setup_flows import _INSTALL_COMMANDS, CliInstallFlow
 
@@ -1617,6 +1719,11 @@ class SyncServer:
                 conn.refinement_fut.set_result(msg)
                 conn.refinement_fut = None
 
+        elif t == "model_download_decision":
+            if conn.model_download_fut and not conn.model_download_fut.done():
+                conn.model_download_fut.set_result(msg)
+                conn.model_download_fut = None
+
         elif t == "chat_message":
             asyncio.ensure_future(self._handle_chat_message(ws, msg))
 
@@ -1776,6 +1883,9 @@ class SyncServer:
 
         elif t == "model_bundle_download":
             await self._handle_model_bundle_download(ws, msg)
+
+        elif t == "model_url_download":
+            await self._handle_model_url_download(ws, msg)
 
         # ── Backend setup flows (install + OAuth) ────────────────────────────
         elif t == "backend_install_start":

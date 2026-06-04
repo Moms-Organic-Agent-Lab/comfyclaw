@@ -10,6 +10,11 @@ from comfyclaw.cli import (
     _probe_openai_compatible,
     _update_env_file,
 )
+from comfyclaw.model_bundles import (
+    huggingface_model_file_from_url,
+    model_url_target,
+    safe_model_filename,
+)
 
 
 def test_update_env_file_preserves_comments_and_updates_keys(tmp_path: Path) -> None:
@@ -71,3 +76,34 @@ def test_probe_openai_compatible_parses_model_ids() -> None:
     assert ok is True
     assert models == ["Qwen/Qwen3.6-27B"]
     assert "Qwen/Qwen3.6-27B" in detail
+
+
+def test_huggingface_model_file_from_url_parses_resolve_url() -> None:
+    mf = huggingface_model_file_from_url(
+        "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/"
+        "split_files/vae/qwen_image_vae.safetensors?download=true",
+        "vae",
+    )
+
+    assert mf is not None
+    assert mf.repo == "Comfy-Org/Qwen-Image_ComfyUI"
+    assert mf.revision == "main"
+    assert mf.path == "split_files/vae/qwen_image_vae.safetensors"
+    assert mf.dest_subdir == "vae"
+    assert mf.dest_name == "qwen_image_vae.safetensors"
+
+
+def test_model_url_target_restricts_destination_subdirs(tmp_path: Path) -> None:
+    target = model_url_target(tmp_path, "loras", "../adapter.safetensors")
+    assert target == tmp_path / "models" / "loras" / "adapter.safetensors"
+
+    try:
+        model_url_target(tmp_path, "../custom_nodes", "x.safetensors")
+    except ValueError as exc:
+        assert "Unsupported model destination" in str(exc)
+    else:
+        raise AssertionError("expected unsupported destination to fail")
+
+
+def test_safe_model_filename_removes_path_and_unsafe_chars() -> None:
+    assert safe_model_filename("../my model?.safetensors") == "my model.safetensors"

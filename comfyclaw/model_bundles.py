@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,7 @@ class ModelFile:
     dest_subdir: str
     filename: str | None = None
     optional: bool = False
+    revision: str | None = None
 
     @property
     def dest_name(self) -> str:
@@ -96,6 +98,19 @@ MODEL_BUNDLES: dict[str, ModelBundle] = {
 }
 
 
+MODEL_DEST_SUBDIRS: tuple[str, ...] = (
+    "checkpoints",
+    "diffusion_models",
+    "text_encoders",
+    "vae",
+    "loras",
+    "controlnet",
+    "clip",
+    "clip_vision",
+    "upscale_models",
+)
+
+
 def probe_openai_compatible(api_base: str, timeout: int = 5) -> tuple[bool, str, list[str]]:
     url = api_base.rstrip("/") + "/models"
     try:
@@ -125,7 +140,88 @@ def download_model_file(mf: ModelFile, target: Path) -> None:
     from huggingface_hub import hf_hub_download
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    src = Path(hf_hub_download(repo_id=mf.repo, filename=mf.path))
+    kwargs = {"repo_id": mf.repo, "filename": mf.path}
+    if mf.revision:
+        kwargs["revision"] = mf.revision
+    src = Path(hf_hub_download(**kwargs))
     tmp = target.with_suffix(target.suffix + ".tmp")
     shutil.copy2(src, tmp)
     tmp.replace(target)
+
+
+def safe_model_filename(raw: str) -> str:
+    """Return a filesystem-safe model filename from user input or URL path."""
+    name = Path(urllib.parse.unquote(raw or "")).name.strip()
+    if not name or name in {".", ".."}:
+        raise ValueError("Could not determine a filename from the URL.")
+    cleaned = "".join(ch for ch in name if ch.isalnum() or ch in "._-+()[] ")
+    cleaned = cleaned.strip().lstrip(".")
+    if not cleaned:
+        raise ValueError("Filename contains no safe characters.")
+    return cleaned
+
+
+def model_url_target(comfyui_dir: Path, dest_subdir: str, filename: str) -> Path:
+    """Resolve a user-requested download target inside ComfyUI/models."""
+    dest_subdir = dest_subdir.strip().strip("/\\")
+    if dest_subdir not in MODEL_DEST_SUBDIRS:
+        raise ValueError(f"Unsupported model destination: {dest_subdir!r}")
+    return comfyui_dir / "models" / dest_subdir / safe_model_filename(filename)
+
+
+def huggingface_model_file_from_url(url: str, dest_subdir: str, filename: str | None = None) -> ModelFile | None:
+    """Parse common Hugging Face file URLs into a ModelFile, or None."""
+    parsed = urllib.parse.urlparse(url.strip())
+    if parsed.netloc.lower() not in {"huggingface.co", "www.huggingface.co"}:
+        return None
+    parts = [urllib.parse.unquote(p) for p in parsed.path.split("/") if p]
+    marker_idx = next(
+        (i for i, part in enumerate(parts) if part in {"resolve", "blob", "raw"}),
+        -1,
+    )
+    if marker_idx <= 0 or marker_idx + 2 >= len(parts):
+        return None
+    repo = "/".join(parts[:marker_idx])
+    revision = parts[marker_idx + 1]
+    file_path = "/".join(parts[marker_idx + 2 :])
+    return ModelFile(
+        repo=repo,
+        path=file_path,
+        dest_subdir=dest_subdir,
+        filename=filename or safe_model_filename(file_path),
+        revision=revision,
+    )
+
+
+def download_model_url(url: str, target: Path) -> None:
+    """Download a generic URL to target with an atomic replace."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    req = urllib.request.Request(url, headers={"User-Agent": "comfyclaw-model-downloader"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp, tmp.open("wb") as out:
+            shutil.copyfileobj(resp, out)
+        tmp.replace(target)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+def download_model_from_url(
+    url: str,
+    comfyui_dir: Path,
+    dest_subdir: str,
+    filename: str | None = None,
+) -> Path:
+    """Download a Hugging Face or direct URL into ComfyUI/models/<dest_subdir>."""
+    parsed = urllib.parse.urlparse(url.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("Model URL must start with http:// or https://.")
+    guessed_name = filename or safe_model_filename(parsed.path)
+    target = model_url_target(comfyui_dir, dest_subdir, guessed_name)
+    mf = huggingface_model_file_from_url(url, dest_subdir, filename=target.name)
+    if mf is not None:
+        download_model_file(mf, target)
+    else:
+        download_model_url(url, target)
+    return target

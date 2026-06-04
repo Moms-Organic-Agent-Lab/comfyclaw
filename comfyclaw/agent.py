@@ -11,6 +11,7 @@ Tool categories
 Inspection  : inspect_workflow, query_available_models
 Prompt      : set_prompt  (auto-resolves sampler→encoder links; no node ID needed)
 Basic edit  : set_param, add_node, connect_nodes, delete_node
+Models      : download_model_weights
 LoRA        : add_lora_loader
 ControlNet  : add_controlnet
 Regional    : add_regional_attention
@@ -27,8 +28,10 @@ import sys
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
+from pathlib import Path
 
 from .agent_backends import AgentBackend, ToolCall, get_backend
+from .model_bundles import MODEL_DEST_SUBDIRS, download_model_from_url
 from .skill_manager import SkillsRegistry
 from .workflow import WorkflowManager
 
@@ -119,6 +122,8 @@ Decision heuristics
 -------------------
   Workflow is EMPTY (no nodes)          → read_skill("workflow-builder") FIRST.
                                          Then query_available_models to pick arch.
+  Required model is missing / empty list → read_skill("model-downloader"), then call
+                                         download_model_weights with a trusted URL.
   Workflow contains QwenImageModelLoader → read_skill("qwen-image-2512") FIRST.
                                          Qwen has NO KSampler/ControlNet/LoRA —
                                          all tuning is on RH_QwenImageGenerator.
@@ -158,6 +163,15 @@ Node parameter constraints (DO NOT violate)
   set weight_dtype to "default" and do not attempt further dtype changes.
   LoRA class is "LoraLoader" (not LoRALoader).
   ControlNet apply class is "ControlNetApplyAdvanced".
+
+Model download protocol
+-----------------------
+If query_available_models returns an empty list, or a required checkpoint / UNET /
+VAE / text encoder / LoRA is missing, you may call download_model_weights.
+This tool asks the user for approval before downloading. Do not use guessed URLs:
+use URLs from a skill, a known model bundle, or a URL the user supplied.
+After a successful download, tell the user that ComfyUI may need a restart for
+loader dropdowns to refresh, then continue with exact local filenames when possible.
 """
 
 _PINNED_MODEL_SECTION = """\
@@ -223,6 +237,36 @@ _TOOLS: list[dict] = [
                 }
             },
             "required": ["model_type"],
+        },
+    ),
+    _tool(
+        "download_model_weights",
+        (
+            "Ask the user for approval, then download model weights into ComfyUI/models. "
+            "Use this when query_available_models shows required weights are missing."
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Hugging Face resolve/blob/raw URL or direct http(s) model URL.",
+                },
+                "dest_subdir": {
+                    "type": "string",
+                    "enum": list(MODEL_DEST_SUBDIRS),
+                    "description": "ComfyUI models subdirectory, e.g. checkpoints, diffusion_models, vae, loras.",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Optional destination filename. Leave empty to use the URL filename.",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Short user-facing reason why this model is needed.",
+                },
+            },
+            "required": ["url", "dest_subdir", "reason"],
         },
     ),
     _tool(
@@ -518,6 +562,7 @@ class ClawAgent:
         backend_name: str = "litellm",
         api_base: str | None = None,
         agent_session_id: str = "",
+        model_download_callback: Callable[[dict], dict] | None = None,
     ) -> None:
         # Propagate the API key into the environment so LiteLLM picks it up.
         # For Anthropic keys (sk-ant-…) we set ANTHROPIC_API_KEY; for other
@@ -537,6 +582,7 @@ class ClawAgent:
         self.on_agent_event: Callable[[str, str, str, dict | None], None] | None = None
         self.max_tool_rounds = max_tool_rounds
         self.pinned_image_model = pinned_image_model
+        self.model_download_callback = model_download_callback
         self.last_direct_answer = ""
 
         # Backend selection: explicit instance wins, otherwise build by name.
@@ -612,6 +658,9 @@ class ClawAgent:
 
                 case "query_available_models":
                     return self._query_models(inputs["model_type"]), False
+
+                case "download_model_weights":
+                    return self._download_model_weights(inputs), False
 
                 case "set_prompt":
                     pos = inputs.get("positive_text") or ""
@@ -1048,6 +1097,57 @@ class ClawAgent:
             )
         except Exception as exc:
             return f"❌ Could not query {model_type}: {exc}"
+
+    def _download_model_weights(self, inputs: dict) -> str:
+        url = str(inputs.get("url") or "").strip()
+        dest_subdir = str(inputs.get("dest_subdir") or "").strip()
+        filename = str(inputs.get("filename") or "").strip() or None
+        reason = str(inputs.get("reason") or "").strip()
+        if not url:
+            return "❌ download_model_weights: url is required."
+        if dest_subdir not in MODEL_DEST_SUBDIRS:
+            return (
+                "❌ download_model_weights: dest_subdir must be one of "
+                f"{', '.join(MODEL_DEST_SUBDIRS)}."
+            )
+        if self.model_download_callback is None:
+            return (
+                "⚠️ Model download requires user approval, but no ComfyClaw panel is connected "
+                "for this run. Ask the user to open the panel or run `comfyclaw models download-url`."
+            )
+
+        request = {
+            "url": url,
+            "dest_subdir": dest_subdir,
+            "filename": filename or "",
+            "reason": reason,
+        }
+        decision = self.model_download_callback(request)
+        if not decision.get("approved"):
+            why = decision.get("reason") or "User declined the download."
+            return f"⚠️ Model download not approved: {why}"
+
+        comfyui_dir = (
+            Path(os.environ["COMFYUI_DIR"]).expanduser()
+            if os.environ.get("COMFYUI_DIR", "").strip()
+            else Path.home() / "Documents" / "ComfyUI"
+        )
+        self._emit_event(
+            "tool_result",
+            f"Downloading model weights to {comfyui_dir / 'models' / dest_subdir}...",
+            "download_model_weights",
+            None,
+        )
+        target = download_model_from_url(
+            url,
+            comfyui_dir=comfyui_dir,
+            dest_subdir=dest_subdir,
+            filename=filename,
+        )
+        return (
+            f"✅ Downloaded model weights to {target}. "
+            "Restart ComfyUI if the loader dropdown does not show the new file yet."
+        )
 
     # ------------------------------------------------------------------
     # Helpers

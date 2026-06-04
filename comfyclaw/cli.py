@@ -52,8 +52,10 @@ from pathlib import Path
 
 from .model_bundles import (
     MODEL_BUNDLES,
+    MODEL_DEST_SUBDIRS,
     bundle_status,
     download_model_file,
+    download_model_from_url,
     model_target,
     probe_openai_compatible,
 )
@@ -61,6 +63,7 @@ from .model_bundles import (
 # Backward-compatible names used by tests and downstream scripts.
 _MODEL_BUNDLES = MODEL_BUNDLES
 _bundle_status = bundle_status
+_download_model_from_url = download_model_from_url
 _download_model_file = download_model_file
 _model_target = model_target
 _probe_openai_compatible = probe_openai_compatible
@@ -873,17 +876,29 @@ def _cmd_models(args: argparse.Namespace) -> None:
     """List, check, or download known ComfyUI model bundles."""
     action = args.models_action
 
+    comfyui_dir = (
+        Path(args.comfyui_dir).expanduser()
+        if getattr(args, "comfyui_dir", None)
+        else _comfyui_dir()
+    )
+    if action == "download-url":
+        print(f"[models] Downloading URL into {comfyui_dir / 'models' / args.dest_subdir}")
+        target = download_model_from_url(
+            args.url,
+            comfyui_dir=comfyui_dir,
+            dest_subdir=args.dest_subdir,
+            filename=args.filename or None,
+        )
+        print(f"[models] Done: {target}")
+        print("[models] Restart ComfyUI so model dropdowns refresh.")
+        return
+
     if action == "list":
         print("\n[models] Known bundles")
         for name, bundle in MODEL_BUNDLES.items():
             print(f"  {name:<18} {bundle.description}")
         return
 
-    comfyui_dir = (
-        Path(args.comfyui_dir).expanduser()
-        if getattr(args, "comfyui_dir", None)
-        else _comfyui_dir()
-    )
     bundle = MODEL_BUNDLES[args.bundle]
     statuses = bundle_status(comfyui_dir, bundle)
     print(f"\n[models] {bundle.name}: {bundle.description}")
@@ -1500,6 +1515,30 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Also download optional files such as Lightning LoRAs.",
     )
     download_p.set_defaults(func=_cmd_models)
+
+    url_p = models_sub.add_parser(
+        "download-url",
+        help="Download a pasted model URL into ComfyUI/models",
+    )
+    url_p.add_argument("url", help="Hugging Face file URL or direct http(s) URL")
+    url_p.add_argument(
+        "--dest-subdir",
+        default="checkpoints",
+        choices=MODEL_DEST_SUBDIRS,
+        help="ComfyUI models subdirectory for the downloaded file.",
+    )
+    url_p.add_argument(
+        "--filename",
+        default="",
+        help="Optional destination filename. Defaults to the URL filename.",
+    )
+    url_p.add_argument(
+        "--comfyui-dir",
+        default=None,
+        metavar="DIR",
+        help="ComfyUI installation directory (or set COMFYUI_DIR in .env)",
+    )
+    url_p.set_defaults(func=_cmd_models)
 
     doctor_p = sub.add_parser(
         "doctor",

@@ -29,6 +29,7 @@ def _make_agent(
     agent.on_agent_event = None
     agent.max_tool_rounds = 10
     agent.pinned_image_model = pinned_image_model
+    agent.model_download_callback = None
     # New-style backend abstraction — Phase 1 refactor.
     from comfyclaw.agent_backends.litellm_backend import LiteLLMBackend
 
@@ -155,6 +156,44 @@ class TestDispatch:
         )
         assert "❌" in result
         assert stop is False
+
+    def test_download_model_weights_requires_approval_callback(self, wm: WorkflowManager) -> None:
+        agent = _make_agent()
+
+        result, stop = agent._dispatch(
+            "download_model_weights",
+            {
+                "url": "https://example.com/model.safetensors",
+                "dest_subdir": "loras",
+                "reason": "Needed for the requested style.",
+            },
+            wm,
+        )
+
+        assert stop is False
+        assert "requires user approval" in result
+
+    def test_download_model_weights_downloads_after_approval(self, wm: WorkflowManager, tmp_path) -> None:
+        agent = _make_agent()
+        agent.model_download_callback = lambda req: {"approved": True, "reason": "ok"}
+
+        with patch.dict("os.environ", {"COMFYUI_DIR": str(tmp_path)}), patch(
+            "comfyclaw.agent.download_model_from_url",
+            return_value=tmp_path / "models" / "loras" / "model.safetensors",
+        ) as mock_download:
+            result, stop = agent._dispatch(
+                "download_model_weights",
+                {
+                    "url": "https://example.com/model.safetensors",
+                    "dest_subdir": "loras",
+                    "reason": "Needed for the requested style.",
+                },
+                wm,
+            )
+
+        assert stop is False
+        assert "Downloaded model weights" in result
+        mock_download.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

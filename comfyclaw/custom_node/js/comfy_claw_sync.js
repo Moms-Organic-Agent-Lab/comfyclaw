@@ -57,6 +57,39 @@ const DEFAULT_WS_URL = `ws://${window.location.hostname}:8765`;
 const RECONNECT_DELAY_MS = 3000;
 const MAX_RECONNECT_ATTEMPTS = 20;
 const DEFAULT_OP_DELAY_MS = 400;
+const MODEL_DEST_SUBDIRS = [
+  ["checkpoints", "Checkpoints"],
+  ["diffusion_models", "Diffusion models / UNET"],
+  ["text_encoders", "Text encoders"],
+  ["vae", "VAE"],
+  ["loras", "LoRA"],
+  ["controlnet", "ControlNet"],
+  ["clip", "CLIP"],
+  ["clip_vision", "CLIP Vision"],
+  ["upscale_models", "Upscale models"],
+];
+const MODEL_DOWNLOAD_SAMPLES = [
+  {
+    label: "Qwen-Image-2512 diffusion model",
+    url: "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_2512_fp8_e4m3fn.safetensors",
+    dest: "diffusion_models",
+  },
+  {
+    label: "Qwen-Image text encoder",
+    url: "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
+    dest: "text_encoders",
+  },
+  {
+    label: "Wan2.2 VAE",
+    url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors",
+    dest: "vae",
+  },
+  {
+    label: "Qwen-Image Lightning LoRA",
+    url: "https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning/resolve/main/Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors",
+    dest: "loras",
+  },
+];
 
 // ── Chat state ────────────────────────────────────────────────────────────────
 let _chatHistory = [];   // [{role, content}]
@@ -228,6 +261,197 @@ function _wsSend(payload) {
   if (!_wsOpen()) return false;
   _activeSyncClient.ws.send(JSON.stringify(payload));
   return true;
+}
+
+function _wsSendOrWarn(payload, detail = "Start `comfyclaw serve` and reconnect.") {
+  if (_wsSend(payload)) return true;
+  showToast(`ComfyClaw server is not connected. ${detail}`, "warning", 5500);
+  return false;
+}
+
+let _modelDownloadModal = null;
+let _agentModelDownloadModal = null;
+
+function _openModelDownloadModal() {
+  if (_modelDownloadModal?.isOpen?.()) return;
+  const destOptions = MODEL_DEST_SUBDIRS.map(([value, label]) =>
+    `<option value="${escAttr(value)}">${escHtml(label)}</option>`
+  ).join("");
+  const sampleOptions = MODEL_DOWNLOAD_SAMPLES.map((s, i) =>
+    `<option value="${i}">${escHtml(s.label)}</option>`
+  ).join("");
+  const body = document.createElement("div");
+  body.style.cssText = "display:flex;flex-direction:column;gap:12px;font-size:12px;color:var(--cc-fg);";
+  body.innerHTML = `
+    <div>
+      <label style="display:block;font-size:10px;font-weight:800;text-transform:uppercase;color:var(--cc-fg-muted);margin-bottom:5px;">
+        Sample weights
+      </label>
+      <select id="cc-model-url-sample" style="width:100%;padding:8px 10px;background:var(--cc-surface-tint);color:var(--cc-fg);border:1px solid var(--cc-border);border-radius:8px;">
+        <option value="">Choose a sample or paste your own URL</option>
+        ${sampleOptions}
+      </select>
+    </div>
+    <div>
+      <label style="display:block;font-size:10px;font-weight:800;text-transform:uppercase;color:var(--cc-fg-muted);margin-bottom:5px;">
+        Model URL
+      </label>
+      <input id="cc-model-url-input" type="url" placeholder="https://huggingface.co/.../resolve/main/model.safetensors"
+             spellcheck="false" autocomplete="off"
+             style="width:100%;box-sizing:border-box;padding:8px 10px;background:var(--cc-surface-tint);color:var(--cc-fg);border:1px solid var(--cc-border);border-radius:8px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div>
+        <label style="display:block;font-size:10px;font-weight:800;text-transform:uppercase;color:var(--cc-fg-muted);margin-bottom:5px;">
+          Destination
+        </label>
+        <select id="cc-model-url-dest" style="width:100%;padding:8px 10px;background:var(--cc-surface-tint);color:var(--cc-fg);border:1px solid var(--cc-border);border-radius:8px;">
+          ${destOptions}
+        </select>
+      </div>
+      <div>
+        <label style="display:block;font-size:10px;font-weight:800;text-transform:uppercase;color:var(--cc-fg-muted);margin-bottom:5px;">
+          Filename override
+        </label>
+        <input id="cc-model-url-filename" type="text" placeholder="optional"
+               spellcheck="false" autocomplete="off"
+               style="width:100%;box-sizing:border-box;padding:8px 10px;background:var(--cc-surface-tint);color:var(--cc-fg);border:1px solid var(--cc-border);border-radius:8px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;">
+      </div>
+    </div>
+    <div id="cc-model-url-status" style="font-size:11px;color:var(--cc-fg-muted);min-height:16px;"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;">
+      <button id="cc-model-url-download" class="cc-btn cc-btn-warn" style="padding:8px 12px;font-size:12px;">
+        Download
+      </button>
+    </div>
+  `;
+  _modelDownloadModal = openModal({
+    title: "Download Model Weights",
+    subtitle: "Pick a sample or paste a direct Hugging Face / HTTP URL",
+    body,
+    width: 680,
+    onClose: () => { _modelDownloadModal = null; },
+  });
+  const sampleEl = body.querySelector("#cc-model-url-sample");
+  const urlEl = body.querySelector("#cc-model-url-input");
+  const destEl = body.querySelector("#cc-model-url-dest");
+  const filenameEl = body.querySelector("#cc-model-url-filename");
+  const statusEl = body.querySelector("#cc-model-url-status");
+  const downloadBtn = body.querySelector("#cc-model-url-download");
+  const startDownload = () => {
+    const url = urlEl.value.trim();
+    if (!url) {
+      urlEl.focus();
+      statusEl.textContent = "Paste a model URL first.";
+      statusEl.style.color = "var(--cc-accent-yellow)";
+      return;
+    }
+    statusEl.textContent = "Starting download...";
+    statusEl.style.color = "var(--cc-accent-blue)";
+    downloadBtn.disabled = true;
+    _wsSendOrWarn({
+      type: "model_url_download",
+      url,
+      dest_subdir: destEl.value,
+      filename: filenameEl.value.trim(),
+    }) || (downloadBtn.disabled = false);
+  };
+  _modelDownloadModal._setStatus = (text, kind = "info") => {
+    statusEl.textContent = text || "";
+    statusEl.style.color =
+      kind === "error" ? "var(--cc-accent-red)" :
+        kind === "ok" ? "var(--cc-accent-green)" :
+          kind === "warn" ? "var(--cc-accent-yellow)" :
+            "var(--cc-fg-muted)";
+    downloadBtn.disabled = kind === "busy";
+  };
+  sampleEl?.addEventListener("change", () => {
+    const sample = MODEL_DOWNLOAD_SAMPLES[Number(sampleEl.value)];
+    if (!sample) return;
+    urlEl.value = sample.url;
+    destEl.value = sample.dest;
+    filenameEl.value = "";
+    statusEl.textContent = "";
+  });
+  downloadBtn?.addEventListener("click", startDownload);
+  urlEl?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); startDownload(); }
+  });
+  setTimeout(() => urlEl?.focus(), 50);
+}
+
+function _openAgentModelDownloadRequest(req = {}) {
+  if (_agentModelDownloadModal?.isOpen?.()) return;
+  const url = String(req.url || "");
+  const dest = String(req.dest_subdir || "checkpoints");
+  const filename = String(req.filename || "");
+  const reason = String(req.reason || "The agent needs this model to continue.");
+  const body = document.createElement("div");
+  body.style.cssText = "font-size:12px;color:var(--cc-fg);line-height:1.5;";
+  body.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <div>
+        <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--cc-fg-muted);margin-bottom:4px;">Reason</div>
+        <div style="background:var(--cc-surface-tint);border:1px solid var(--cc-border);border-radius:8px;padding:9px 10px;">
+          ${escHtml(reason)}
+        </div>
+      </div>
+      <div>
+        <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--cc-fg-muted);margin-bottom:4px;">URL</div>
+        <div title="${escAttr(url)}" style="background:var(--cc-surface-tint);border:1px solid var(--cc-border);border-radius:8px;padding:9px 10px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;word-break:break-all;">
+          ${escHtml(url)}
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div>
+          <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--cc-fg-muted);margin-bottom:4px;">Destination</div>
+          <div style="background:var(--cc-surface-tint);border:1px solid var(--cc-border);border-radius:8px;padding:9px 10px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;">
+            models/${escHtml(dest)}
+          </div>
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--cc-fg-muted);margin-bottom:4px;">Filename</div>
+          <div style="background:var(--cc-surface-tint);border:1px solid var(--cc-border);border-radius:8px;padding:9px 10px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            ${escHtml(filename || "(from URL)")}
+          </div>
+        </div>
+      </div>
+      <div id="cc-agent-model-download-status" style="font-size:11px;color:var(--cc-fg-muted);min-height:16px;">
+        Waiting for your approval. Large downloads can take a while.
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:2px;">
+        <button id="cc-agent-model-download-decline" class="cc-btn cc-btn-secondary" style="padding:8px 12px;font-size:12px;">
+          Decline
+        </button>
+        <button id="cc-agent-model-download-approve" class="cc-btn cc-btn-warn" style="padding:8px 12px;font-size:12px;">
+          Approve download
+        </button>
+      </div>
+    </div>
+  `;
+  _agentModelDownloadModal = openModal({
+    title: "Agent Wants To Download Model Weights",
+    subtitle: "Approve before ComfyClaw writes files into ComfyUI/models",
+    body,
+    width: 680,
+    dismissable: false,
+    onClose: () => { _agentModelDownloadModal = null; },
+  });
+  const statusEl = body.querySelector("#cc-agent-model-download-status");
+  const sendDecision = (approved) => {
+    _wsSend({
+      type: "model_download_decision",
+      approved,
+      reason: approved ? "Approved by user." : "Declined by user.",
+    });
+    if (statusEl) {
+      statusEl.textContent = approved ? "Approved. Download starting..." : "Declined.";
+      statusEl.style.color = approved ? "var(--cc-accent-blue)" : "var(--cc-accent-red)";
+    }
+    setTimeout(() => _agentModelDownloadModal?.close?.(), approved ? 1200 : 350);
+  };
+  body.querySelector("#cc-agent-model-download-approve")?.addEventListener("click", () => sendDecision(true));
+  body.querySelector("#cc-agent-model-download-decline")?.addEventListener("click", () => sendDecision(false));
 }
 
 function createFeedbackPanel() {
@@ -1245,12 +1469,12 @@ function _renderSessionTabs() {
       ? `${sess.name}\nLinked to: ${sess.workflowId}`
       : sess.name;
     tab.style.cssText = `
-      display:flex; align-items:center; gap:5px; padding:6px 11px;
-      border-radius:6px; cursor:pointer; font-size:12px; font-weight:600;
-      white-space:nowrap; max-width:140px; flex-shrink:0; transition:all 0.15s;
-      background:${isActive ? "var(--cc-surface-2)" : "transparent"};
-      color:${isActive ? "var(--cc-fg)" : "var(--cc-fg-dim)"};
-      ${hasMismatch ? "border:1px dashed #f9e2af44;" : "border:1px solid transparent;"}
+      display:flex; align-items:center; gap:5px; padding:6px 10px;
+      border-radius:999px; cursor:pointer; font-size:11.5px; font-weight:650;
+      white-space:nowrap; max-width:150px; flex-shrink:0; transition:all 0.15s;
+      background:${isActive ? "var(--cc-accent-soft-2)" : "var(--cc-surface-tint)"};
+      color:${isActive ? "var(--cc-accent)" : "var(--cc-fg-muted)"};
+      ${hasMismatch ? "border:1px dashed var(--cc-accent-yellow);" : `border:1px solid ${isActive ? "var(--cc-accent)" : "var(--cc-border)"};`}
     `;
 
     const lbl = document.createElement("span");
@@ -1736,47 +1960,29 @@ function createSettingsModal() {
     <!-- Tab bar -->
     <div style="display:flex; gap:0; padding:0 20px; flex-shrink:0;
                 border-bottom:1px solid #313244; background:#1e1e2e;">
+      <button class="cc-stab" data-tab="general"
+              style="padding:10px 16px; border:none; background:transparent;
+                     cursor:pointer; font-size:12px; font-weight:600;
+                     border-bottom:2px solid transparent; transition:all 0.15s;">
+        General
+      </button>
       <button class="cc-stab" data-tab="agents"
               style="padding:10px 16px; border:none; background:transparent;
                      cursor:pointer; font-size:12px; font-weight:600;
                      border-bottom:2px solid transparent; transition:all 0.15s;">
-        🤖 Agents
+        Agents
       </button>
-      <button class="cc-stab" data-tab="setup"
+      <button class="cc-stab" data-tab="models"
               style="padding:10px 16px; border:none; background:transparent;
                      cursor:pointer; font-size:12px; font-weight:600;
                      border-bottom:2px solid transparent; transition:all 0.15s;">
-        ▣ Setup
+        Models
       </button>
-      <button class="cc-stab" data-tab="providers"
+      <button class="cc-stab" data-tab="advanced"
               style="padding:10px 16px; border:none; background:transparent;
                      cursor:pointer; font-size:12px; font-weight:600;
                      border-bottom:2px solid transparent; transition:all 0.15s;">
-        🔑 Providers
-      </button>
-      <button class="cc-stab" data-tab="api-keys"
-              style="padding:10px 16px; border:none; background:transparent;
-                     cursor:pointer; font-size:12px; font-weight:600;
-                     border-bottom:2px solid transparent; transition:all 0.15s;">
-        🗝 API Keys
-      </button>
-      <button class="cc-stab" data-tab="connection"
-              style="padding:10px 16px; border:none; background:transparent;
-                     cursor:pointer; font-size:12px; font-weight:600;
-                     border-bottom:2px solid transparent; transition:all 0.15s;">
-        🔌 Connection
-      </button>
-      <button class="cc-stab" data-tab="defaults"
-              style="padding:10px 16px; border:none; background:transparent;
-                     cursor:pointer; font-size:12px; font-weight:600;
-                     border-bottom:2px solid transparent; transition:all 0.15s;">
-        ⚡ Defaults
-      </button>
-      <button class="cc-stab" data-tab="appearance"
-              style="padding:10px 16px; border:none; background:transparent;
-                     cursor:pointer; font-size:12px; font-weight:600;
-                     border-bottom:2px solid transparent; transition:all 0.15s;">
-        🎨 Appearance
+        Advanced
       </button>
     </div>
 
@@ -1804,27 +2010,121 @@ function createSettingsModal() {
   let _activeSettingsTab = "";
 
   function _activateTab(tab) {
-    _activeSettingsTab = tab;
+    const visibleTab =
+      tab === "setup" ? "models" :
+        (tab === "providers" || tab === "api-keys" || tab === "connection") ? "advanced" :
+          tab;
+    _activeSettingsTab = visibleTab;
     box.querySelectorAll(".cc-stab").forEach(b => {
-      const on = b.dataset.tab === tab;
+      const on = b.dataset.tab === visibleTab;
       b.style.color = on ? "#cba6f7" : "#585b70";
       b.style.borderBottom = on ? "2px solid #cba6f7" : "2px solid transparent";
       b.style.background = "transparent";
     });
     const content = box.querySelector("#cc-stg-content");
     if (tab === "agents") _renderAgentsTab(content);
-    else if (tab === "setup") _renderSetupTab(content);
-    else if (tab === "providers") _renderProvidersTab(content);
-    else if (tab === "api-keys") _renderProvidersTab(content);
-    else if (tab === "connection") _renderConnectionTab(content);
-    else if (tab === "appearance") _renderAppearanceTab(content);
-    else _renderDefaultsTab(content);
+    else if (tab === "models" || tab === "setup") _renderSetupTab(content);
+    else if (tab === "advanced" || tab === "providers" || tab === "api-keys" || tab === "connection") _renderAdvancedTab(content);
+    else _renderGeneralTab(content);
   }
 
   box.querySelectorAll(".cc-stab").forEach(b => b.addEventListener("click", () => _activateTab(b.dataset.tab)));
   box.querySelector("#cc-stg-close").addEventListener("click", () => { overlay.style.display = "none"; });
   box.querySelector("#cc-stg-done").addEventListener("click", () => { overlay.style.display = "none"; });
   overlay.addEventListener("click", e => { if (e.target === overlay) overlay.style.display = "none"; });
+
+  // ── General tab ──────────────────────────────────────────────────────────────
+  function _renderGeneralTab(container) {
+    const theme = localStorage.getItem("comfyclaw_theme") || "dark";
+    const dock = localStorage.getItem("comfyclaw_dock_mode") || "comfy-sidebar";
+    const iters = localStorage.getItem("comfyclaw-gen-iters") || "3";
+    const opDelay = localStorage.getItem("comfyclaw-gen-opdelay") || "400";
+    const verifier = localStorage.getItem("comfyclaw-gen-verifier") || "vlm";
+    const vmodel = localStorage.getItem("comfyclaw-gen-vmodel") || "";
+    const selectStyle = _settingsInputStyle("cursor:pointer;");
+    container.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <section style="background:#313244;border:1px solid #45475a;border-radius:12px;padding:14px 16px;">
+          <div style="font-size:13px;font-weight:800;color:#cdd6f4;margin-bottom:12px;">Run defaults</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div>
+              <label style="${_settingsLabelStyle()}">Iterations</label>
+              <input id="cc-def-iters" type="number" min="1" max="20" value="${iters}"
+                     style="${_settingsInputStyle()}">
+            </div>
+            <div>
+              <label style="${_settingsLabelStyle()}">Op delay</label>
+              <input id="cc-def-opdelay" type="number" min="0" max="2000" value="${opDelay}"
+                     style="${_settingsInputStyle()}">
+            </div>
+          </div>
+          <div style="margin-top:10px;">
+            <label style="${_settingsLabelStyle()}">Verifier mode</label>
+            <select id="cc-def-verifier" style="${selectStyle}">
+              <option value="vlm"    ${verifier === "vlm" ? "selected" : ""}>VLM automatic</option>
+              <option value="human"  ${verifier === "human" ? "selected" : ""}>Human review</option>
+              <option value="hybrid" ${verifier === "hybrid" ? "selected" : ""}>Hybrid</option>
+            </select>
+          </div>
+          <details style="margin-top:10px;">
+            <summary style="cursor:pointer;font-size:11px;color:#a6adc8;">Verifier model override</summary>
+            <select id="cc-def-vmodel" style="${selectStyle} margin-top:8px;">
+              <option value=""                               ${!vmodel ? "selected" : ""}>Same as agent</option>
+              <option value="anthropic/claude-sonnet-4-5"   ${vmodel === "anthropic/claude-sonnet-4-5" ? "selected" : ""}>Claude Sonnet 4.5</option>
+              <option value="openai/gpt-5.4"                ${vmodel === "openai/gpt-5.4" ? "selected" : ""}>GPT-5.4</option>
+              <option value="gemini/gemini-2.5-flash"       ${vmodel === "gemini/gemini-2.5-flash" ? "selected" : ""}>Gemini 2.5 Flash</option>
+            </select>
+          </details>
+        </section>
+        <section style="background:#313244;border:1px solid #45475a;border-radius:12px;padding:14px 16px;">
+          <div style="font-size:13px;font-weight:800;color:#cdd6f4;margin-bottom:12px;">Interface</div>
+          <div>
+            <label style="${_settingsLabelStyle()}">Theme</label>
+            <select id="cc-stg-theme" style="${selectStyle}">
+              <option value="dark"  ${theme === "dark" ? "selected" : ""}>Dark</option>
+              <option value="light" ${theme === "light" ? "selected" : ""}>Light</option>
+            </select>
+          </div>
+          <div style="margin-top:10px;">
+            <label style="${_settingsLabelStyle()}">Panel position</label>
+            <select id="cc-stg-dock" style="${selectStyle}">
+              <option value="comfy-sidebar" ${dock === "comfy-sidebar" ? "selected" : ""}>ComfyUI sidebar</option>
+              <option value="sidebar"       ${dock === "sidebar" ? "selected" : ""}>Right rail</option>
+              <option value="float"         ${dock === "float" ? "selected" : ""}>Floating</option>
+            </select>
+          </div>
+        </section>
+      </div>
+    `;
+
+    const sync = (id, lsKey, panelId) => {
+      const el = container.querySelector(id);
+      if (!el) return;
+      el.addEventListener("change", () => {
+        const v = el.value;
+        localStorage.setItem(lsKey, v);
+        const panelEl = document.getElementById(panelId);
+        if (panelEl) panelEl.value = v;
+        if (lsKey === "comfyclaw-gen-opdelay") localStorage.setItem("comfyclaw_op_delay", v);
+      });
+    };
+    sync("#cc-def-iters", "comfyclaw-gen-iters", "comfyclaw-gen-iters");
+    sync("#cc-def-verifier", "comfyclaw-gen-verifier", "comfyclaw-gen-verifier");
+    sync("#cc-def-vmodel", "comfyclaw-gen-vmodel", "comfyclaw-gen-vmodel");
+    sync("#cc-def-opdelay", "comfyclaw-gen-opdelay", "comfyclaw-gen-opdelay");
+    container.querySelector("#cc-stg-theme")?.addEventListener("change", (e) => {
+      const v = e.target.value;
+      localStorage.setItem("comfyclaw_theme", v);
+      document.documentElement.setAttribute("data-cc-theme", v);
+      const themeBtn = document.getElementById("comfyclaw-theme-btn");
+      if (themeBtn) themeBtn.textContent = v === "light" ? "☀" : "🌙";
+    });
+    container.querySelector("#cc-stg-dock")?.addEventListener("change", (e) => {
+      const v = e.target.value;
+      localStorage.setItem("comfyclaw_dock_mode", v);
+      if (_clawPanel?._reapplyDock) _clawPanel._reapplyDock();
+    });
+  }
 
   // ── Agents tab ───────────────────────────────────────────────────────────────
   // Lists the four agent backends (LiteLLM / Claude Code / Codex / Gemini CLI)
@@ -2005,13 +2305,18 @@ function createSettingsModal() {
     const bundle = localStorage.getItem("comfyclaw_setup_bundle") || "wan22-t2v";
     container.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:14px;">
-        <section style="background:#313244;border:1px solid #45475a;border-radius:12px;padding:14px 16px;">
+        <details style="background:#313244;border:1px solid #45475a;border-radius:12px;padding:14px 16px;">
+          <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:10px;">
+            <span>
+              <span style="font-size:13px;font-weight:800;color:#cdd6f4;">Local LLM endpoint</span>
+              <span style="display:block;font-size:11px;color:#a6adc8;line-height:1.45;margin-top:2px;">
+                vLLM, llama.cpp, LM Studio, or another OpenAI-compatible server.
+              </span>
+            </span>
+            <span style="font-size:11px;color:#7f849c;">Configure</span>
+          </summary>
           <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
             <div>
-              <div style="font-size:13px;font-weight:800;color:#cdd6f4;">Local LLM</div>
-              <div style="font-size:11px;color:#a6adc8;line-height:1.45;margin-top:2px;">
-                OpenAI-compatible endpoint, for vLLM / llama.cpp / LM Studio.
-              </div>
             </div>
             <button id="cc-setup-apply-llm" class="cc-btn cc-btn-info"
                     style="padding:7px 11px;font-size:11px;flex-shrink:0;">
@@ -2035,7 +2340,7 @@ function createSettingsModal() {
               <span id="cc-setup-llm-status" style="font-size:11px;color:#7f849c;"></span>
             </div>
           </div>
-        </section>
+        </details>
 
         <section style="background:#313244;border:1px solid #45475a;border-radius:12px;padding:14px 16px;">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
@@ -2063,6 +2368,8 @@ function createSettingsModal() {
                       style="padding:7px 11px;font-size:11px;">Check installed</button>
               <button id="cc-setup-download-models" class="cc-btn cc-btn-warn"
                       style="padding:7px 11px;font-size:11px;">Download missing</button>
+              <button id="cc-setup-download-url" class="cc-btn cc-btn-secondary"
+                      style="padding:7px 11px;font-size:11px;">Download from URL</button>
               <span id="cc-setup-models-status" style="font-size:11px;color:#7f849c;"></span>
             </div>
             <div id="cc-setup-models-list"
@@ -2070,13 +2377,15 @@ function createSettingsModal() {
           </div>
         </section>
 
-        <section style="background:#1e1e2e;border:1px solid #45475a;border-radius:10px;padding:12px 14px;">
-          <div style="font-size:12px;font-weight:700;color:#cdd6f4;margin-bottom:6px;">Video preset</div>
-          <div style="font-size:11px;color:#a6adc8;line-height:1.5;">
-            For Wan2.2 runs, use Video + Manual first. After model files download, restart ComfyUI so loader dropdowns refresh, then reconnect this panel.
+        <section style="background:#1e1e2e;border:1px solid #45475a;border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;">
+          <div>
+            <div style="font-size:12px;font-weight:700;color:#cdd6f4;margin-bottom:3px;">Video preset</div>
+            <div style="font-size:11px;color:#a6adc8;line-height:1.5;">
+              Switch to Video + Manual for Wan-style setup runs.
+            </div>
           </div>
           <button id="cc-setup-video-preset" class="cc-btn cc-btn-secondary"
-                  style="padding:7px 11px;font-size:11px;margin-top:10px;">
+                  style="padding:7px 11px;font-size:11px;flex-shrink:0;">
             Set Video + Manual
           </button>
         </section>
@@ -2158,6 +2467,7 @@ function createSettingsModal() {
         include_optional: !!optionalEl.checked,
       });
     });
+    container.querySelector("#cc-setup-download-url")?.addEventListener("click", _openModelDownloadModal);
     container.querySelector("#cc-setup-video-preset")?.addEventListener("click", () => {
       localStorage.setItem("comfyclaw_modality", "video");
       localStorage.setItem("comfyclaw_run_mode", "manual");
@@ -2497,6 +2807,29 @@ function createSettingsModal() {
   }
 
   // ── Connection tab ───────────────────────────────────────────────────────────
+  function _renderAdvancedTab(container) {
+    container.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <details open style="background:#313244;border:1px solid #45475a;border-radius:12px;padding:14px 16px;">
+          <summary style="cursor:pointer;font-size:13px;font-weight:800;color:#cdd6f4;">
+            API keys and custom models
+          </summary>
+          <div id="cc-advanced-providers" style="margin-top:12px;"></div>
+        </details>
+        <details style="background:#313244;border:1px solid #45475a;border-radius:12px;padding:14px 16px;">
+          <summary style="cursor:pointer;font-size:13px;font-weight:800;color:#cdd6f4;">
+            Connection
+          </summary>
+          <div id="cc-advanced-connection" style="margin-top:12px;"></div>
+        </details>
+      </div>
+    `;
+    const prov = container.querySelector("#cc-advanced-providers");
+    const conn = container.querySelector("#cc-advanced-connection");
+    if (prov) _renderProvidersTab(prov);
+    if (conn) _renderConnectionTab(conn);
+  }
+
   function _renderConnectionTab(container) {
     const wsUrl = escAttr(localStorage.getItem("comfyclaw_ws_url") || DEFAULT_WS_URL);
     const comfyUrl = escAttr(localStorage.getItem("comfyclaw_comfyui_addr") || "127.0.0.1:8000");
@@ -2644,7 +2977,7 @@ function createSettingsModal() {
   // Public
   // ``anchor`` is the id of an element inside the active tab that should be
   // scrolled into view after rendering (e.g. ``cc-custom-models-section``).
-  overlay.openTo = (tab = "agents", anchor = null) => {
+  overlay.openTo = (tab = "general", anchor = null) => {
     overlay.style.display = "flex";
     _activateTab(tab);
     if (anchor) {
@@ -2652,6 +2985,7 @@ function createSettingsModal() {
       requestAnimationFrame(() => {
         const target = box.querySelector(`#${anchor}`);
         if (target) {
+          target.closest("details")?.setAttribute("open", "");
           target.scrollIntoView({ block: "start", behavior: "smooth" });
           // Subtle flash so the user sees what we scrolled to.
           target.style.transition = "box-shadow 0.6s ease";
@@ -2670,7 +3004,7 @@ function createSettingsModal() {
     if (content) _renderAgentsTab(content);
   };
 
-  _activateTab("agents");
+  _activateTab("general");
   return overlay;
 }
 
@@ -3021,13 +3355,10 @@ function createComfyClawPanel() {
                    flex-shrink:0;cursor:pointer;
                    box-shadow:0 0 0 2px rgba(249,226,175,0.18);"></span>
       <span id="cc-node-count" style="display:none;"></span>
-      <div style="display:flex; gap:4px; align-items:center; flex:1; min-width:0;">
-        <div id="comfyclaw-sessions-tabs"
-             style="display:flex; gap:3px; flex:1; overflow-x:auto; min-width:0;
-                    scrollbar-width:none;"></div>
-        <button id="comfyclaw-new-session-btn" class="cc-icon-btn"
-                title="New session"
-                style="font-size:26px;font-weight:500;">+</button>
+      <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">
+        <span style="font-weight:800;color:var(--cc-accent);font-size:13px;letter-spacing:0.2px;">
+          ComfyClaw
+        </span>
       </div>
       <!-- Right cluster: theme + dock moved into Settings modal (Appearance
            tab). Only the always-relevant actions remain here. -->
@@ -3051,10 +3382,19 @@ function createComfyClawPanel() {
          style="padding:12px 14px 10px; flex-shrink:0;
                 max-height:380px; overflow-y:auto;">
       <div id="cc-session-setup"
-           style="display:flex; flex-direction:column; gap:8px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-          <span class="cc-label" style="margin:0;">Session Setup</span>
-          <span class="cc-pill">Agent Session</span>
+           style="display:flex; flex-direction:column; gap:10px;
+                  background:var(--cc-surface-tint);border:1px solid var(--cc-border);
+                  border-radius:10px;padding:10px 11px;margin-bottom:10px;">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
+          <div>
+            <div style="font-size:12px;font-weight:800;color:var(--cc-fg);line-height:1.25;">
+              What should this session do?
+            </div>
+            <div style="font-size:11px;color:var(--cc-fg-muted);line-height:1.35;margin-top:2px;">
+              Start clean or improve the workflow already on the canvas.
+            </div>
+          </div>
+          <span class="cc-pill" style="flex-shrink:0;">Session</span>
         </div>
         <div id="cc-session-strategy-toggle" class="cc-segment-row" role="group"
              aria-label="Build strategy">
@@ -3209,21 +3549,10 @@ function createComfyClawPanel() {
     <!-- ── Chat / Agent Log ────────────────────────────────────────── -->
     <div id="comfyclaw-think-body"
          style="display:flex; flex-direction:column; flex:1; min-height:180px;
-                overflow:hidden; border-top:1px solid var(--cc-border);">
-      <!-- Log section header -->
-      <div style="display:flex; align-items:center; justify-content:space-between;
-                  padding:6px 12px 4px; flex-shrink:0;">
-        <span class="cc-label" style="margin:0;">Chat &amp; Agent Log</span>
-        <div style="display:flex; gap:4px; align-items:center;">
-          <span id="comfyclaw-think-count" class="cc-pill cc-pill-mono"
-                style="display:none;"></span>
-          <button id="comfyclaw-clear-log" class="cc-icon-btn cc-icon-btn-sm"
-                  title="Clear log">🗑</button>
-        </div>
-      </div>
+                overflow:hidden;">
       <div style="position:relative; flex:1; min-height:0; display:flex; flex-direction:column;">
         <div id="comfyclaw-think-log"
-             style="flex:1; overflow-y:auto; padding:6px 10px 8px;
+             style="flex:1; overflow-y:auto; padding:8px 10px 8px;
                     scroll-behavior:smooth; min-height:0;
                     scrollbar-width:thin; scrollbar-color:var(--cc-border) transparent;"></div>
         <!-- Scroll-to-bottom button -->
@@ -3260,6 +3589,11 @@ function createComfyClawPanel() {
               <span class="cc-chip-chev">▾</span>
             </button>
             <div style="flex:1;"></div>
+            <span id="comfyclaw-think-count" class="cc-pill cc-pill-mono"
+                  style="display:none;"></span>
+            <button id="comfyclaw-clear-log" class="cc-composer-btn"
+                    title="Clear conversation"
+                    style="width:32px;height:32px;font-size:14px;">⌫</button>
             <button id="comfyclaw-think-send" class="cc-composer-btn cc-composer-btn-primary"
                     title="Send to ComfyClaw (Enter)">↑</button>
           </div>
@@ -3328,7 +3662,7 @@ function createComfyClawPanel() {
   });
 
   // ── New session button ────────────────────────────────────────────────────────
-  panel.querySelector("#comfyclaw-new-session-btn").addEventListener("click", _newSession);
+  panel.querySelector("#comfyclaw-new-session-btn")?.addEventListener("click", _newSession);
 
   // ── Clear log button ──────────────────────────────────────────────────────────
   panel.querySelector("#comfyclaw-clear-log").addEventListener("click", () => {
@@ -3436,7 +3770,7 @@ function createComfyClawPanel() {
   settingsBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     if (!_settingsModal) _settingsModal = createSettingsModal();
-    _settingsModal.openTo("providers");
+    _settingsModal.openTo("general");
   });
 
   // ── Connection dot — click to manually retry ──────────────────────────────
@@ -5337,6 +5671,23 @@ function _augmentPanelWithTabs(panel) {
   // Move existing children into the slot.
   const parent = generateBody.parentElement;
   parent.insertBefore(generateSlot, generateBody);
+  const sessionRail = document.createElement("div");
+  sessionRail.id = "cc-generate-session-rail";
+  sessionRail.style.cssText = `
+    display:flex;align-items:center;gap:6px;flex-shrink:0;
+    padding:8px 10px;background:var(--cc-bg);
+    border-bottom:1px solid var(--cc-border);
+  `;
+  sessionRail.innerHTML = `
+    <div id="comfyclaw-sessions-tabs"
+         style="display:flex;gap:4px;flex:1;overflow-x:auto;min-width:0;
+                scrollbar-width:none;"></div>
+    <button id="comfyclaw-new-session-btn" class="cc-icon-btn"
+            title="New session"
+            style="width:28px;height:28px;font-size:22px;font-weight:500;flex-shrink:0;">+</button>
+  `;
+  generateSlot.appendChild(sessionRail);
+  sessionRail.querySelector("#comfyclaw-new-session-btn")?.addEventListener("click", _newSession);
   generateSlot.appendChild(generateBody);
   if (actionBar) generateSlot.appendChild(actionBar);
   generateSlot.appendChild(logBody);
@@ -5378,6 +5729,8 @@ function _augmentPanelWithTabs(panel) {
   tabStrip.bindSlot("generate", generateSlot);
   tabStrip.bindSlot("skills", skillsSlot);
   tabStrip.bindSlot("history", historySlot);
+  _renderSessionTabs();
+  _syncSessionSetupUI();
 
   // 3) Inject the Mode toggle (Manual/Auto/Co-pilot) at the top of the
   // controls body — strategy buttons are hidden now (the composer drives
@@ -5760,10 +6113,10 @@ function clearAgentLog() {
   if (logEl) {
     logEl.innerHTML = `
       <div id="comfyclaw-log-empty" class="cc-empty"
-           style="user-select:none;">
-        <div class="cc-empty-icon">💬</div>
-        <div class="cc-empty-title">Ready when you are.</div>
-        <div>Ask about your workflow, or send a prompt to start building.</div>
+           style="user-select:none;border:none;background:transparent;padding:18px 8px;">
+        <div style="font-size:12px;color:var(--cc-fg-dim);line-height:1.5;text-align:center;">
+          Ask about your workflow, or describe what to generate.
+        </div>
       </div>
     `;
   }
@@ -6071,6 +6424,29 @@ class SyncClient {
         statusEl.textContent = msg.success ? (msg.detail || "Download complete.") : (msg.error || "Download failed.");
       }
       showToast(msg.success ? "Model download complete." : "Model download failed.", msg.success ? "success" : "warning", 4500);
+
+    } else if (msg.type === "model_url_download_progress") {
+      const statusEl = document.getElementById("cc-setup-models-status");
+      if (statusEl) {
+        statusEl.style.color = "#89b4fa";
+        statusEl.textContent = "Downloading model URL...";
+      }
+      _modelDownloadModal?._setStatus?.("Downloading model URL...", "busy");
+
+    } else if (msg.type === "model_url_download_complete") {
+      const statusEl = document.getElementById("cc-setup-models-status");
+      const text = msg.success
+        ? `Downloaded to ${msg.target || "ComfyUI models"}`
+        : (msg.error || "URL download failed.");
+      if (statusEl) {
+        statusEl.style.color = msg.success ? "#a6e3a1" : "#f38ba8";
+        statusEl.textContent = text;
+      }
+      _modelDownloadModal?._setStatus?.(text, msg.success ? "ok" : "error");
+      showToast(msg.success ? "Model download complete." : "Model download failed.", msg.success ? "success" : "warning", 4500);
+
+    } else if (msg.type === "model_download_request") {
+      _openAgentModelDownloadRequest(msg.request || {});
 
       // ── Backend setup flows: install + OAuth ─────────────────────────────────
     } else if (msg.type === "backend_install_progress") {
