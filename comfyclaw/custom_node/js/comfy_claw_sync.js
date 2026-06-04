@@ -422,6 +422,131 @@ function hideFeedbackPanel() {
   }
 }
 
+function showSkillEvolutionProposalModal(proposal) {
+  const p = proposal || {};
+  const action = (p.action || "update").toString();
+  const name = (p.name || "unnamed-skill").toString();
+  const confidence = Number.isFinite(Number(p.confidence)) ? Number(p.confidence) : 0;
+  const evidence = Array.isArray(p.evidence) ? p.evidence.filter(Boolean) : [];
+  const body = (p.body || "").toString().trim() || "_No draft body was returned._";
+  const rationale = (p.rationale || "").toString().trim() || "No rationale provided.";
+  const description = (p.description || "").toString().trim() || "No description provided.";
+  const actionLabel = action === "create" ? "Create new skill" : "Refine existing skill";
+  const actionColor = action === "create" ? "var(--cc-accent-green)" : "var(--cc-accent-blue)";
+
+  const evidenceHtml = evidence.length
+    ? `<ol style="margin:0; padding-left:18px; display:flex; flex-direction:column; gap:6px;">
+         ${evidence.slice(0, 8).map((e) => `<li>${escHtml(e)}</li>`).join("")}
+       </ol>`
+    : `<div style="color:var(--cc-fg-dim);">No evidence captured.</div>`;
+
+  const bodyHtml = renderMarkdown(body);
+  const modalBody = `
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+                gap:14px; align-items:start;">
+      <section style="display:flex; flex-direction:column; gap:12px; min-width:0;">
+        <div style="background:var(--cc-surface); border:1px solid var(--cc-border);
+                    border-radius:10px; padding:12px;">
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+            <span style="font-size:11px; font-weight:800; color:${actionColor};
+                         background:color-mix(in srgb, ${actionColor} 14%, transparent);
+                         border:1px solid color-mix(in srgb, ${actionColor} 38%, transparent);
+                         border-radius:999px; padding:3px 8px;">
+              ${escHtml(actionLabel)}
+            </span>
+            <span style="font-size:11px; color:var(--cc-fg-dim);">
+              Confidence ${(confidence * 100).toFixed(0)}%
+            </span>
+          </div>
+          <div style="font-size:15px; font-weight:800; color:var(--cc-fg);
+                      font-family:monospace; overflow-wrap:anywhere;">
+            ${escHtml(name)}
+          </div>
+          <div style="margin-top:8px; color:var(--cc-fg-muted); line-height:1.55;">
+            ${escHtml(description)}
+          </div>
+        </div>
+
+        <div style="background:var(--cc-surface); border:1px solid var(--cc-border);
+                    border-radius:10px; padding:12px;">
+          <div style="font-size:11px; font-weight:800; color:var(--cc-accent);
+                      text-transform:uppercase; margin-bottom:7px;">
+            Rationale
+          </div>
+          <div style="color:var(--cc-fg-muted); line-height:1.55;">
+            ${renderMarkdown(rationale)}
+          </div>
+        </div>
+
+        <div style="background:var(--cc-surface); border:1px solid var(--cc-border);
+                    border-radius:10px; padding:12px;">
+          <div style="font-size:11px; font-weight:800; color:var(--cc-accent);
+                      text-transform:uppercase; margin-bottom:7px;">
+            Evidence
+          </div>
+          <div style="color:var(--cc-fg-muted); line-height:1.55;">
+            ${evidenceHtml}
+          </div>
+        </div>
+      </section>
+
+      <section style="background:var(--cc-surface); border:1px solid var(--cc-border);
+                      border-radius:10px; min-width:0; overflow:hidden;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;
+                    padding:10px 12px; border-bottom:1px solid var(--cc-border);">
+          <div>
+            <div style="font-size:11px; font-weight:800; color:var(--cc-accent);
+                        text-transform:uppercase;">
+              Draft SKILL.md Body
+            </div>
+            <div style="font-size:11px; color:var(--cc-fg-dim);">
+              Rendered preview of the reusable lesson to write.
+            </div>
+          </div>
+        </div>
+        <div class="cc-scroll" style="padding:12px; max-height:46vh; overflow:auto;
+                    color:var(--cc-fg); line-height:1.6;">
+          ${bodyHtml}
+        </div>
+      </section>
+    </div>
+
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+                margin-top:14px; padding-top:12px; border-top:1px solid var(--cc-border);">
+      <div style="font-size:11px; color:var(--cc-fg-dim); line-height:1.4;">
+        Applying writes this skill to the user skill directory and reloads the Skills tab.
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; flex-shrink:0;">
+        <button id="cc-skill-evo-skip" class="cc-btn cc-btn-secondary">Skip</button>
+        <button id="cc-skill-evo-approve" class="cc-btn cc-btn-primary">Apply Skill Evolution</button>
+      </div>
+    </div>
+  `;
+
+  return new Promise((resolve) => {
+    let answered = false;
+    const modal = openModal({
+      title: "Review Skill Evolution",
+      subtitle: `${actionLabel}: ${name}`,
+      body: modalBody,
+      width: 920,
+      dismissable: true,
+      onClose: () => {
+        if (!answered) resolve(false);
+      },
+    });
+
+    const answer = (approved) => {
+      if (answered) return;
+      answered = true;
+      modal.close();
+      resolve(approved);
+    };
+    modal.body.querySelector("#cc-skill-evo-skip")?.addEventListener("click", () => answer(false));
+    modal.body.querySelector("#cc-skill-evo-approve")?.addEventListener("click", () => answer(true));
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // API-format detection & conversion (for full-reload fallback)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -862,10 +987,70 @@ function _isSameWorkflow(idA, idB) {
 const _SESSION_KEY = "comfyclaw_sessions_v3";   // bumped to avoid stale data
 const _ACTIVE_SESSION_KEY = "comfyclaw_active_session_v3";
 
-function _mkSession(name = "Session 1", workflowId = "") {
+function _nextGenericSessionName(sessions = []) {
+  let maxN = 0;
+  const used = new Set();
+  sessions.forEach((s) => {
+    const n = _asStr(s?.name).trim();
+    if (!n) return;
+    used.add(n.toLowerCase());
+    const m = /^Session\s+(\d+)$/i.exec(n);
+    if (m) maxN = Math.max(maxN, parseInt(m[1], 10) || 0);
+  });
+  let candidate = `Session ${maxN + 1 || 1}`;
+  let i = maxN + 2;
+  while (used.has(candidate.toLowerCase())) {
+    candidate = `Session ${i++}`;
+  }
+  return candidate;
+}
+
+function _uniqueSessionName(base, sessions = [], selfId = "") {
+  const root = (_asStr(base).trim() || _nextGenericSessionName(sessions)).slice(0, 80);
+  const used = new Set(
+    sessions
+      .filter((s) => !selfId || s.id !== selfId)
+      .map((s) => _asStr(s?.name).trim().toLowerCase())
+      .filter(Boolean),
+  );
+  if (!used.has(root.toLowerCase())) return root;
+  const generic = /^Session\s+\d+$/i.test(root);
+  if (generic) return _nextGenericSessionName(sessions.filter((s) => !selfId || s.id !== selfId));
+  let i = 2;
+  let candidate = `${root} ${i}`;
+  while (used.has(candidate.toLowerCase())) {
+    i += 1;
+    candidate = `${root} ${i}`;
+  }
+  return candidate;
+}
+
+function _nextSessionName(workflowId = "", sessions = []) {
+  const wfId = _asStr(workflowId).trim();
+  if (wfId && wfId !== "workflow") {
+    const existing = sessions.filter(s => _isSameWorkflow(s.workflowId || "", wfId)).length;
+    const phaseNames = ["Early draft", "Refinements", "New features", "Debug", "Experiments"];
+    const phaseName = phaseNames[existing] || `Phase ${existing + 1}`;
+    return _uniqueSessionName(`${wfId.slice(0, 14)} · ${phaseName}`, sessions);
+  }
+  return _nextGenericSessionName(sessions);
+}
+
+function _dedupeSessionNames(sessions) {
+  const out = [];
+  sessions.forEach((s, i) => {
+    if (s.workflowId === undefined) s.workflowId = "";
+    if (typeof s.workflowId !== "string") s.workflowId = "";
+    const rawName = typeof s.name === "string" && s.name.trim() ? s.name.trim() : `Session ${i + 1}`;
+    s.name = _uniqueSessionName(rawName, out, s.id);
+    out.push(s);
+  });
+}
+
+function _mkSession(name = "", workflowId = "", sessions = []) {
   return {
     id: `s${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
-    name: _asStr(name) || "Session 1",
+    name: _asStr(name) || _nextSessionName(workflowId, sessions),
     workflowId: _asStr(workflowId),  // identity string from _detectWorkflowIdentity().name
     prompt: "",
     chatHistory: [],
@@ -884,7 +1069,8 @@ _sessions.forEach((s, i) => {
   if (typeof s.name !== "string" || !s.name) s.name = `Session ${i + 1}`;
   if (typeof s.workflowId !== "string") s.workflowId = "";
 });
-if (!_sessions.length) _sessions = [_mkSession()];
+_dedupeSessionNames(_sessions);
+if (!_sessions.length) _sessions = [_mkSession("", "", _sessions)];
 // Persist sanitized sessions back so the broken titles never come back.
 try { localStorage.setItem(_SESSION_KEY, JSON.stringify(_sessions)); } catch (_) { }
 
@@ -894,6 +1080,15 @@ if (!_sessions.find(s => s.id === _activeSessionId)) _activeSessionId = _session
 function _activeSession() { return _sessions.find(s => s.id === _activeSessionId) || _sessions[0]; }
 
 function _persistSessions() { localStorage.setItem(_SESSION_KEY, JSON.stringify(_sessions)); }
+
+function _requestCheckpointsForActiveSession() {
+  _checkpoints = [];
+  _renderCheckpoints();
+  _wsSend({
+    type: "list_checkpoints",
+    session_id: _activeSessionId,
+  });
+}
 
 function _captureCurrentSession() {
   const sess = _activeSession();
@@ -929,6 +1124,7 @@ function _applySession(sessionId) {
       content: msg.content, timestamp: Date.now() / 1000
     });
   }
+  _requestCheckpointsForActiveSession();
 }
 
 function _switchSession(id) {
@@ -943,16 +1139,8 @@ function _switchSession(id) {
 function _newSession(nameHint = "") {
   _captureCurrentSession();
   const { name: wfId } = _detectWorkflowIdentity();
-  // Count existing sessions for this workflow to number the new one
-  const existing = _sessions.filter(s => _isSameWorkflow(s.workflowId || "", wfId)).length;
-  const phaseNames = ["Early draft", "Refinements", "New features", "Debug", "Experiments"];
-  const phaseName = phaseNames[existing] || `Phase ${existing + 1}`;
-  const defaultName = nameHint || (
-    wfId && wfId !== "workflow"
-      ? `${wfId.slice(0, 14)} · ${phaseName}`
-      : `Session ${_sessions.length + 1}`
-  );
-  const sess = _mkSession(defaultName, wfId);
+  const defaultName = nameHint || _nextSessionName(wfId, _sessions);
+  const sess = _mkSession(defaultName, wfId, _sessions);
   _sessions.push(sess);
   _persistSessions();
   _activeSessionId = sess.id;
@@ -963,6 +1151,7 @@ function _newSession(nameHint = "") {
   clearAgentLog();
   _setActiveProvider("anthropic", false);
   _renderSessionTabs();
+  _requestCheckpointsForActiveSession();
 }
 
 /**
@@ -1027,7 +1216,12 @@ function _renderSessionTabs() {
       inp.style.cssText = "background:transparent;color:inherit;border:none;outline:none;font:inherit;width:80px;";
       lbl.replaceWith(inp);
       inp.focus(); inp.select();
-      const commit = () => { sess.name = inp.value.trim() || sess.name; _persistSessions(); _renderSessionTabs(); };
+      const commit = () => {
+        const next = inp.value.trim() || sess.name;
+        sess.name = _uniqueSessionName(next, _sessions, sess.id);
+        _persistSessions();
+        _renderSessionTabs();
+      };
       inp.addEventListener("blur", commit);
       inp.addEventListener("keydown", ev => {
         if (ev.key === "Enter") { ev.preventDefault(); commit(); }
@@ -2900,7 +3094,7 @@ function createComfyClawPanel() {
       </details>
 
       <!-- Checkpoint strip -->
-      <div id="comfyclaw-cp-section" style="margin-top:8px; display:none;">
+      <div id="comfyclaw-cp-section" style="margin-top:8px;">
         <div style="display:flex; justify-content:space-between; align-items:center;
                     margin-bottom:4px;">
           <span class="cc-label" style="margin:0;">📸 Checkpoints</span>
@@ -3451,7 +3645,12 @@ function createComfyClawPanel() {
     let workflow = selectedMode === "improve" ? await exportCurrentWorkflow() : null;
     const cpWf = workflow || await exportCurrentWorkflow();
     if (cpWf && Object.keys(cpWf).length > 0)
-      _activeSyncClient.ws.send(JSON.stringify({ type: "save_checkpoint", workflow: cpWf, label: `Before: ${prompt.slice(0, 40)}` }));
+      _activeSyncClient.ws.send(JSON.stringify({
+        type: "save_checkpoint",
+        workflow: cpWf,
+        label: `Before: ${prompt.slice(0, 40)}`,
+        session_id: _activeSessionId,
+      }));
     // Stamp the session with the current workflow identity at generation time
     const sess = _activeSession();
     if (sess) {
@@ -3539,7 +3738,8 @@ function createComfyClawPanel() {
     const wf = await exportCurrentWorkflow();
     _activeSyncClient.ws.send(JSON.stringify({
       type: "save_checkpoint", workflow: wf,
-      label: `Manual — ${new Date().toLocaleTimeString()}`
+      label: `Manual — ${new Date().toLocaleTimeString()}`,
+      session_id: _activeSessionId,
     }));
   });
 
@@ -5593,7 +5793,11 @@ class SyncClient {
       _updateConnDot("connected");
       showToast("ComfyClaw connected", "success", 2000);
       // Send hello so the backend can register this tab's _ConnState
-      this.ws.send(JSON.stringify({ type: "hello", connection_id: _CONNECTION_ID }));
+      this.ws.send(JSON.stringify({
+        type: "hello",
+        connection_id: _CONNECTION_ID,
+        session_id: _activeSessionId,
+      }));
     };
 
     this.ws.onmessage = (event) => {
@@ -5722,21 +5926,12 @@ class SyncClient {
       if (typeof _scoreboardSink === "function") _scoreboardSink(msg);
     } else if (msg.type === "skill_evolution_proposal") {
       const p = msg.proposal || {};
-      const evidence = Array.isArray(p.evidence) ? p.evidence.slice(0, 4).join("\n- ") : "";
-      const approved = confirm(
-        `ComfyClaw proposes to ${p.action || "update"} skill "${p.name || ""}".\n\n` +
-        `${p.description || ""}\n\n` +
-        `Rationale:\n${p.rationale || ""}\n\n` +
-        (evidence ? `Evidence:\n- ${evidence}\n\n` : "") +
-        "Apply this skill evolution?"
-      );
-      if (_ws && _ws.readyState === WebSocket.OPEN) {
-        _ws.send(JSON.stringify({
-          type: "apply_skill_evolution",
-          approved,
-          name: p.name || "",
-        }));
-      }
+      const approved = await showSkillEvolutionProposalModal(p);
+      _wsSend({
+        type: "apply_skill_evolution",
+        approved,
+        name: p.name || "",
+      });
       appendAgentLog({
         event_type: "info",
         content: approved
@@ -5913,13 +6108,16 @@ class SyncClient {
 
       // ── Checkpoint list update ────────────────────────────────────────────────
     } else if (msg.type === "checkpoints_list") {
+      if (msg.session_id && msg.session_id !== _activeSessionId) return;
       _checkpoints = msg.checkpoints || [];
       _renderCheckpoints();
 
     } else if (msg.type === "checkpoint_saved") {
+      if (msg.session_id && msg.session_id !== _activeSessionId) return;
       showToast(`📸 Snapshot: ${msg.label || "saved"}`, "success", 2000);
 
     } else if (msg.type === "checkpoint_restored") {
+      if (msg.session_id && msg.session_id !== _activeSessionId) return;
       if (!msg.success) {
         showToast("Checkpoint restore failed", "error");
         console.warn("[ComfyClaw] Checkpoint restore failed for id:", msg.id);
@@ -6196,12 +6394,18 @@ function _renderCheckpoints() {
   const section = document.getElementById("comfyclaw-cp-section");
   if (!list || !section) return;
 
-  if (_checkpoints.length === 0) {
-    section.style.display = "none";
-    return;
-  }
   section.style.display = "block";
   list.innerHTML = "";
+
+  if (_checkpoints.length === 0) {
+    list.innerHTML = `
+      <div style="padding:7px 8px; border:1px dashed var(--cc-border);
+                  border-radius:7px; color:var(--cc-fg-dim); font-size:11px;">
+        No checkpoints in this session yet.
+      </div>
+    `;
+    return;
+  }
 
   _checkpoints.forEach(cp => {
     const row = document.createElement("div");
@@ -6251,7 +6455,11 @@ function _renderCheckpoints() {
     });
     restoreBtn.addEventListener("click", () => {
       if (_activeSyncClient?.ws?.readyState === WebSocket.OPEN) {
-        _activeSyncClient.ws.send(JSON.stringify({ type: "restore_checkpoint", id: cp.id }));
+        _activeSyncClient.ws.send(JSON.stringify({
+          type: "restore_checkpoint",
+          id: cp.id,
+          session_id: _activeSessionId,
+        }));
         showToast(`Restored: ${cp.label.slice(0, 30)}`, "success");
       }
     });

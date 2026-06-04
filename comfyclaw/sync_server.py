@@ -114,6 +114,12 @@ def diff_workflows(old: dict, new: dict) -> list[dict]:
 
 
 _MAX_CHECKPOINTS = 20
+_CHECKPOINT_DEFAULT_SESSION = "__default__"
+
+
+def _checkpoint_session_key(session_id: str = "") -> str:
+    session_id = str(session_id or "").strip()
+    return session_id or _CHECKPOINT_DEFAULT_SESSION
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -130,6 +136,8 @@ class _ConnState:
     workflow: dict | None = None  # last known API-format workflow
     checkpoints: list = field(default_factory=list)
     cp_counter: int = 0
+    checkpoints_by_session: dict[str, list] = field(default_factory=dict)
+    cp_counter_by_session: dict[str, int] = field(default_factory=dict)
     cancel: threading.Event = field(default_factory=threading.Event)
 
     # asyncio futures — only valid inside the event-loop thread
@@ -142,30 +150,50 @@ class _ConnState:
 
     # ── checkpoint helpers ────────────────────────────────────────────────────
 
-    def save_checkpoint(self, workflow: dict, label: str = "") -> str:
+    def _checkpoint_bucket(self, session_id: str = "") -> list:
+        key = _checkpoint_session_key(session_id)
+        if not self.checkpoints_by_session and self.checkpoints:
+            self.checkpoints_by_session[_CHECKPOINT_DEFAULT_SESSION] = self.checkpoints
+            self.cp_counter_by_session[_CHECKPOINT_DEFAULT_SESSION] = self.cp_counter
+        return self.checkpoints_by_session.setdefault(key, [])
+
+    def save_checkpoint(self, workflow: dict, label: str = "", session_id: str = "") -> str:
+        key = _checkpoint_session_key(session_id)
+        counter = self.cp_counter_by_session.get(key, 0) + 1
+        self.cp_counter_by_session[key] = counter
         self.cp_counter += 1
         cp_id = f"cp_{int(time.time())}_{self.cp_counter}"
-        self.checkpoints.append(
+        bucket = self._checkpoint_bucket(session_id)
+        bucket.append(
             {
                 "id": cp_id,
-                "label": label or f"Snapshot #{self.cp_counter}",
+                "label": label or f"Snapshot #{counter}",
                 "workflow": copy.deepcopy(workflow),
                 "timestamp": time.time(),
+                "session_id": session_id or "",
             }
         )
-        if len(self.checkpoints) > _MAX_CHECKPOINTS:
-            self.checkpoints = self.checkpoints[-_MAX_CHECKPOINTS:]
+        if len(bucket) > _MAX_CHECKPOINTS:
+            self.checkpoints_by_session[key] = bucket[-_MAX_CHECKPOINTS:]
+        if key == _CHECKPOINT_DEFAULT_SESSION:
+            self.checkpoints = self.checkpoints_by_session[key]
         return cp_id
 
-    def list_checkpoints(self) -> list[dict]:
+    def list_checkpoints(self, session_id: str = "") -> list[dict]:
+        bucket = self._checkpoint_bucket(session_id)
         return [
-            {"id": c["id"], "label": c["label"], "timestamp": c["timestamp"]}
-            for c in reversed(self.checkpoints)
+            {
+                "id": c["id"],
+                "label": c["label"],
+                "timestamp": c["timestamp"],
+                "session_id": c.get("session_id", session_id or ""),
+            }
+            for c in reversed(bucket)
         ]
 
-    def restore_checkpoint(self, cp_id: str) -> dict | None:
+    def restore_checkpoint(self, cp_id: str, session_id: str = "") -> dict | None:
         """Return the workflow dict for *cp_id*, or None if not found."""
-        cp = next((c for c in self.checkpoints if c["id"] == cp_id), None)
+        cp = next((c for c in self._checkpoint_bucket(session_id) if c["id"] == cp_id), None)
         return copy.deepcopy(cp["workflow"]) if cp else None
 
 
@@ -550,21 +578,27 @@ class SyncServer:
 
     # ── legacy checkpoint shims (delegate to active connection) ─────────────
 
-    def save_checkpoint(self, workflow: dict, label: str = "", target_ws: Any = None) -> str:
+    def save_checkpoint(
+        self,
+        workflow: dict,
+        label: str = "",
+        target_ws: Any = None,
+        session_id: str = "",
+    ) -> str:
         with self._conns_lock:
             conn = (
                 self._conns.get(target_ws) if target_ws else next(iter(self._conns.values()), None)
             )
         if conn is None:
             return ""
-        return conn.save_checkpoint(workflow, label)
+        return conn.save_checkpoint(workflow, label, session_id=session_id)
 
-    def list_checkpoints(self, target_ws: Any = None) -> list[dict]:
+    def list_checkpoints(self, target_ws: Any = None, session_id: str = "") -> list[dict]:
         with self._conns_lock:
             conn = (
                 self._conns.get(target_ws) if target_ws else next(iter(self._conns.values()), None)
             )
-        return conn.list_checkpoints() if conn else []
+        return conn.list_checkpoints(session_id=session_id) if conn else []
 
     # ── Iteration scoreboard ─────────────────────────────────────────────────
 
@@ -1540,13 +1574,15 @@ class SyncServer:
 
         if t == "hello":
             conn.connection_id = msg.get("connection_id", "")
+            session_id = str(msg.get("session_id") or "")
             log.debug("[SyncServer] hello from connection_id=%r", conn.connection_id)
             # Send current checkpoint list for this connection
             await ws.send(
                 json.dumps(
                     {
                         "type": "checkpoints_list",
-                        "checkpoints": conn.list_checkpoints(),
+                        "checkpoints": conn.list_checkpoints(session_id=session_id),
+                        "session_id": session_id,
                     }
                 )
             )
@@ -1580,13 +1616,15 @@ class SyncServer:
         elif t == "save_checkpoint":
             workflow = msg.get("workflow") or conn.workflow or {}
             label = msg.get("label", "")
-            cp_id = conn.save_checkpoint(workflow, label)
+            session_id = str(msg.get("session_id") or "")
+            cp_id = conn.save_checkpoint(workflow, label, session_id=session_id)
             await ws.send(
                 json.dumps(
                     {
                         "type": "checkpoint_saved",
                         "id": cp_id,
                         "label": label or "Snapshot",
+                        "session_id": session_id,
                     }
                 )
             )
@@ -1594,14 +1632,16 @@ class SyncServer:
                 json.dumps(
                     {
                         "type": "checkpoints_list",
-                        "checkpoints": conn.list_checkpoints(),
+                        "checkpoints": conn.list_checkpoints(session_id=session_id),
+                        "session_id": session_id,
                     }
                 )
             )
 
         elif t == "restore_checkpoint":
             cp_id = msg.get("id", "")
-            wf = conn.restore_checkpoint(cp_id)
+            session_id = str(msg.get("session_id") or "")
+            wf = conn.restore_checkpoint(cp_id, session_id=session_id)
             ok = wf is not None
             await ws.send(
                 json.dumps(
@@ -1609,6 +1649,7 @@ class SyncServer:
                         "type": "checkpoint_restored",
                         "id": cp_id,
                         "success": ok,
+                        "session_id": session_id,
                     }
                 )
             )
@@ -1617,11 +1658,13 @@ class SyncServer:
                 self.broadcast(wf, target_ws=ws)
 
         elif t == "list_checkpoints":
+            session_id = str(msg.get("session_id") or "")
             await ws.send(
                 json.dumps(
                     {
                         "type": "checkpoints_list",
-                        "checkpoints": conn.list_checkpoints(),
+                        "checkpoints": conn.list_checkpoints(session_id=session_id),
+                        "session_id": session_id,
                     }
                 )
             )

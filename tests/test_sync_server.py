@@ -10,8 +10,9 @@ broadcast / messaging machinery without bringing up a real WebSocket.
 from __future__ import annotations
 
 import copy
+import json
 from contextlib import contextmanager
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from comfyclaw.sync_server import SyncServer, _ConnState, diff_workflows
 
@@ -398,6 +399,21 @@ class TestConnStateCheckpoints:
         conn = _ConnState(ws=MagicMock())
         assert conn.restore_checkpoint("nope") is None
 
+    def test_checkpoints_are_scoped_by_session(self):
+        conn = _ConnState(ws=MagicMock())
+        wf_a = {"1": {"class_type": "A", "inputs": {}}}
+        wf_b = {"2": {"class_type": "B", "inputs": {}}}
+
+        cp_a = conn.save_checkpoint(wf_a, label="A", session_id="session-a")
+        cp_b = conn.save_checkpoint(wf_b, label="B", session_id="session-b")
+
+        list_a = conn.list_checkpoints(session_id="session-a")
+        list_b = conn.list_checkpoints(session_id="session-b")
+        assert [c["id"] for c in list_a] == [cp_a]
+        assert [c["id"] for c in list_b] == [cp_b]
+        assert conn.restore_checkpoint(cp_a, session_id="session-a") == wf_a
+        assert conn.restore_checkpoint(cp_a, session_id="session-b") is None
+
 
 # ---------------------------------------------------------------------------
 # Skill evolution approval
@@ -417,3 +433,21 @@ class TestSkillEvolutionApproval:
 
         assert fut.done()
         assert fut.result()["approved"] is True
+
+
+class TestCheckpointProtocol:
+    async def test_hello_lists_active_session_checkpoints(self):
+        srv = _make_server()
+        ws = MagicMock(name="ws")
+        ws.send = AsyncMock()
+        conn = _ConnState(ws=ws)
+        conn.save_checkpoint({"1": {"class_type": "A", "inputs": {}}}, "A", session_id="a")
+        conn.save_checkpoint({"2": {"class_type": "B", "inputs": {}}}, "B", session_id="b")
+
+        await srv._dispatch(ws, conn, {"type": "hello", "session_id": "b"})
+
+        sent = [json.loads(call.args[0]) for call in ws.send.call_args_list]
+        msg = sent[-1]
+        assert msg["type"] == "checkpoints_list"
+        assert msg["session_id"] == "b"
+        assert [c["label"] for c in msg["checkpoints"]] == ["B"]
