@@ -193,7 +193,7 @@ class TestClaudeModelNormalisation:
             ("anthropic/claude-opus-4-1", "opus"),
             ("anthropic/claude-haiku", "haiku"),
             ("claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20250929"),
-            ("openai/gpt-4o", ""),
+            ("openai/gpt-5.4", ""),
             ("foo/bar", ""),
         ],
     )

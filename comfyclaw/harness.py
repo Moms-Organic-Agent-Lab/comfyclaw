@@ -56,9 +56,70 @@ _StatusCallback = Callable[[str, int, str], None]
 log = logging.getLogger(__name__)
 
 
+def resolve_verifier_model(
+    verifier_model: str | None,
+    agent_model: str,
+    agent_backend: str,
+) -> str:
+    """Resolve raw verifier model to a valid LiteLLM vision model matching the provider."""
+    vmodel = (verifier_model or "").strip()
+    backend = (agent_backend or "litellm").strip().lower().replace("_", "-")
+    amodel = (agent_model or "").strip()
+
+    backend_defaults = {
+        "claude-code": "anthropic/claude-3-5-sonnet",
+        "codex": "openai/gpt-5.4",
+        "gemini-cli": "gemini/gemini-2.0-flash",
+    }
+
+    # 1. If the verifier model is not explicitly set, prefer a backend-local
+    # default so the evaluator stays in the same provider family as the agent.
+    if not vmodel and backend in backend_defaults:
+        return backend_defaults[backend]
+
+    # 2. Determine the raw model string we want to evaluate.
+    raw_model = vmodel if vmodel else amodel
+
+    # 3. Fall back to provider-specific defaults if empty.
+    if not raw_model:
+        return backend_defaults.get(backend, "anthropic/claude-sonnet-4-5")
+
+    raw_lower = raw_model.lower()
+
+    # 4. Check if the model indicates Anthropic
+    if backend == "claude-code" or "claude" in raw_lower or "anthropic" in raw_lower:
+        if "opus" in raw_lower:
+            return "anthropic/claude-3-opus"
+        if "haiku" in raw_lower:
+            return "anthropic/claude-3-haiku"
+        if "claude-3-5-sonnet" in raw_lower or "claude-sonnet-4-5" in raw_lower:
+            return raw_model if "/" in raw_model else f"anthropic/{raw_model}"
+        return "anthropic/claude-3-5-sonnet"
+
+    # 5. Check if the model indicates OpenAI / Codex
+    elif "gpt" in raw_lower or "openai" in raw_lower or raw_lower in ("o3", "o3-mini", "o4-mini"):
+        if "gpt-4o-mini" in raw_lower or "o4-mini" in raw_lower:
+            return "openai/gpt-5.4-mini"
+        if "gpt-4" in raw_lower:
+            if "/" in raw_model:
+                return raw_model
+            return f"openai/{raw_model}"
+        return "openai/gpt-5.4"
+
+    # 6. Check if the model indicates Gemini
+    elif "gemini" in raw_lower or "google" in raw_lower:
+        if "/" in raw_model and ("gemini-2.0" in raw_lower or "gemini-2.5" in raw_lower or "gemini-1.5" in raw_lower):
+            return raw_model
+        return "gemini/gemini-2.0-flash"
+
+    # 7. Fallback: return as-is
+    return raw_model
+
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
+
 
 
 @dataclass
@@ -127,6 +188,14 @@ class HarnessConfig:
         image_model = "realisticVisionV51.safetensors"           # local checkpoint
         image_model = None   # do not override — use whatever the workflow has
     """
+
+    def __post_init__(self) -> None:
+        self.verifier_model = resolve_verifier_model(
+            self.verifier_model,
+            self.model,
+            self.agent_backend,
+        )
+
 
 
 # ---------------------------------------------------------------------------

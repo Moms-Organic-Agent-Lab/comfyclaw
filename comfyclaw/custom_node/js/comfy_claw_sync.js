@@ -775,7 +775,7 @@ const PROVIDERS = {
     label: "Google", emoji: "✦", color: "#4285f4",
     models: [
       { value: "gemini/gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
-      { value: "gemini/gemini-3-flash-preview", label: "Gemini 3 Flash" },
+      { value: "gemini/gemini-3.5-flash", label: "Gemini 3.5 Flash" },
       { value: "gemini/gemini-3.1-flash-lite", label: "Gemini 3.1 Flash Lite" },
     ],
   },
@@ -837,7 +837,7 @@ const CLI_MODELS = {
     models: [
       { value: "", label: "CLI default" },
       { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
-      { value: "gemini-3-flash-preview", label: "Gemini 3 Flash" },
+      { value: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
       { value: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash Lite" },
     ],
   },
@@ -2888,7 +2888,7 @@ function _renderMdTables(text, blocks) {
   const splitCells = (line) => {
     let s = line.trim();
     if (s.startsWith("|")) s = s.slice(1);
-    if (s.endsWith("|"))   s = s.slice(0, -1);
+    if (s.endsWith("|")) s = s.slice(0, -1);
     return s.split("|").map((c) => c.trim());
   };
 
@@ -2898,8 +2898,8 @@ function _renderMdTables(text, blocks) {
         const t = c.trim();
         const l = t.startsWith(":"), r = t.endsWith(":");
         if (l && r) return "center";
-        if (r)      return "right";
-        if (l)      return "left";
+        if (r) return "right";
+        if (l) return "left";
         return null;
       });
 
@@ -2907,7 +2907,7 @@ function _renderMdTables(text, blocks) {
   let i = 0;
   while (i < lines.length) {
     const header = lines[i];
-    const sep    = lines[i + 1];
+    const sep = lines[i + 1];
     if (header && /\|/.test(header) && sep && sepRe.test(sep)) {
       const rows = [];
       let j = i + 2;
@@ -2924,10 +2924,10 @@ function _renderMdTables(text, blocks) {
           "vertical-align:top",
         ];
         if (align) styles.push(`text-align:${align}`);
-        if (isTh)  styles.push("background:var(--cc-surface-2)",
-                               "font-weight:700",
-                               "color:var(--cc-fg)");
-        else       styles.push("color:var(--cc-fg)");
+        if (isTh) styles.push("background:var(--cc-surface-2)",
+          "font-weight:700",
+          "color:var(--cc-fg)");
+        else styles.push("color:var(--cc-fg)");
         const tag = isTh ? "th" : "td";
         return `<${tag} style="${styles.join(";")}">${_renderMdInline(txt)}</${tag}>`;
       };
@@ -4895,8 +4895,8 @@ function createComfyClawPanel() {
           <div style="display:flex;align-items:center;gap:10px;">
             <span class="cc-spin-ring cc-spin-ring-lg"></span>
             <span>${mode === "device_code"
-              ? "Waiting for Codex to print the device-code link…"
-              : "Asking Codex for a sign-in link…"}</span>
+            ? "Waiting for Codex to print the device-code link…"
+            : "Asking Codex for a sign-in link…"}</span>
           </div>
         `;
         return;

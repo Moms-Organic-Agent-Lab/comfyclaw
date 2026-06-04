@@ -642,3 +642,28 @@ class TestPinnedImageModel:
                 assert node["inputs"]["ckpt_name"] == "pinned.safetensors", (
                     f"Expected pinned model but got {node['inputs']['ckpt_name']!r}"
                 )
+
+    def test_verifier_model_resolution(self) -> None:
+        # Default Litellm defaults
+        c1 = HarnessConfig(agent_backend="litellm", model="anthropic/claude-sonnet-4-5")
+        assert c1.verifier_model == "anthropic/claude-sonnet-4-5"
+
+        # Explicit verifier model
+        c2 = HarnessConfig(agent_backend="litellm", model="anthropic/claude-sonnet-4-5", verifier_model="openai/gpt-5.4")
+        assert c2.verifier_model == "openai/gpt-5.4"
+
+        # claude-code agent backend
+        c3 = HarnessConfig(agent_backend="claude-code", model="sonnet")
+        assert c3.verifier_model == "anthropic/claude-3-5-sonnet"
+
+        # codex agent backend
+        c4 = HarnessConfig(agent_backend="codex", model="gpt-5.5")
+        assert c4.verifier_model == "openai/gpt-5.4"
+
+        # gemini-cli agent backend
+        c5 = HarnessConfig(agent_backend="gemini-cli", model="")
+        assert c5.verifier_model == "gemini/gemini-2.0-flash"
+
+        # CLI backend defaults should not be pulled toward the agent model's provider.
+        c6 = HarnessConfig(agent_backend="codex", model="anthropic/claude-sonnet-4-5")
+        assert c6.verifier_model == "openai/gpt-5.4"
