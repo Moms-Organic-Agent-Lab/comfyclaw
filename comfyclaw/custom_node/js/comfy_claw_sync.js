@@ -271,6 +271,7 @@ function _wsSendOrWarn(payload, detail = "Start `comfyclaw serve` and reconnect.
 
 let _modelDownloadModal = null;
 let _agentModelDownloadModal = null;
+let _computeWarningModal = null;
 
 function _openModelDownloadModal() {
   if (_modelDownloadModal?.isOpen?.()) return;
@@ -452,6 +453,70 @@ function _openAgentModelDownloadRequest(req = {}) {
   };
   body.querySelector("#cc-agent-model-download-approve")?.addEventListener("click", () => sendDecision(true));
   body.querySelector("#cc-agent-model-download-decline")?.addEventListener("click", () => sendDecision(false));
+}
+
+function _openComputeWarningModal(risk = {}) {
+  if (_computeWarningModal?.isOpen?.()) return;
+  const workload = String(risk.workload || "Generation");
+  const device = String(risk.device || "unknown device");
+  const required = risk.required_vram_gb == null ? "unknown" : `${Number(risk.required_vram_gb).toFixed(0)} GB`;
+  const available = risk.available_vram_gb == null ? "unknown" : `${Number(risk.available_vram_gb).toFixed(1)} GB`;
+  const reason = String(risk.reason || "Local compute may not be sufficient. Are you sure you want to generate?");
+  const body = document.createElement("div");
+  body.style.cssText = "display:flex;flex-direction:column;gap:12px;font-size:12px;color:var(--cc-fg);line-height:1.5;";
+  body.innerHTML = `
+    <div style="background:rgba(249,226,175,0.10);border:1px solid var(--cc-accent-yellow);
+                border-radius:10px;padding:11px 12px;color:var(--cc-fg);">
+      ${escHtml(reason)}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div style="background:var(--cc-surface-tint);border:1px solid var(--cc-border);border-radius:8px;padding:9px 10px;">
+        <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--cc-fg-muted);">Workload</div>
+        <div style="font-weight:700;margin-top:2px;">${escHtml(workload)}</div>
+      </div>
+      <div style="background:var(--cc-surface-tint);border:1px solid var(--cc-border);border-radius:8px;padding:9px 10px;">
+        <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--cc-fg-muted);">Device</div>
+        <div style="font-weight:700;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escAttr(device)}">${escHtml(device)}</div>
+      </div>
+      <div style="background:var(--cc-surface-tint);border:1px solid var(--cc-border);border-radius:8px;padding:9px 10px;">
+        <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--cc-fg-muted);">Estimated need</div>
+        <div style="font-weight:700;margin-top:2px;">${escHtml(required)}</div>
+      </div>
+      <div style="background:var(--cc-surface-tint);border:1px solid var(--cc-border);border-radius:8px;padding:9px 10px;">
+        <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--cc-fg-muted);">Free VRAM</div>
+        <div style="font-weight:700;margin-top:2px;color:var(--cc-accent-yellow);">${escHtml(available)}</div>
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--cc-fg-muted);">
+      The workflow has already been built on the canvas. You can skip generation, edit the workflow, or continue anyway.
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;">
+      <button id="cc-compute-skip" class="cc-btn cc-btn-secondary" style="padding:8px 12px;font-size:12px;">
+        Skip generation
+      </button>
+      <button id="cc-compute-run" class="cc-btn cc-btn-warn" style="padding:8px 12px;font-size:12px;">
+        Generate anyway
+      </button>
+    </div>
+  `;
+  _computeWarningModal = openModal({
+    title: "Local Compute May Be Insufficient",
+    subtitle: "Workflow is ready. Confirm before running ComfyUI generation.",
+    body,
+    width: 660,
+    dismissable: false,
+    onClose: () => { _computeWarningModal = null; },
+  });
+  const decide = (approved) => {
+    _wsSend({
+      type: "generation_compute_decision",
+      approved,
+      reason: approved ? "User chose to generate anyway." : "User skipped generation.",
+    });
+    setTimeout(() => _computeWarningModal?.close?.(), 200);
+  };
+  body.querySelector("#cc-compute-run")?.addEventListener("click", () => decide(true));
+  body.querySelector("#cc-compute-skip")?.addEventListener("click", () => decide(false));
 }
 
 function createFeedbackPanel() {
@@ -6447,6 +6512,9 @@ class SyncClient {
 
     } else if (msg.type === "model_download_request") {
       _openAgentModelDownloadRequest(msg.request || {});
+
+    } else if (msg.type === "generation_compute_warning") {
+      _openComputeWarningModal(msg.risk || {});
 
       // ── Backend setup flows: install + OAuth ─────────────────────────────────
     } else if (msg.type === "backend_install_progress") {

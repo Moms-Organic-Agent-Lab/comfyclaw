@@ -146,6 +146,7 @@ class _ConnState:
     refinement_fut: Any = None  # asyncio.Future[dict] | None
     skill_evolution_fut: Any = None  # asyncio.Future[dict] | None
     model_download_fut: Any = None  # asyncio.Future[dict] | None
+    compute_confirm_fut: Any = None  # asyncio.Future[dict] | None
 
     # ── Run-mode early-stop (accept_now) ──────────────────────────────────────
     accept_now: threading.Event = field(default_factory=threading.Event)
@@ -511,6 +512,54 @@ class SyncServer:
                 reply = await asyncio.wait_for(fut, timeout=timeout)
             finally:
                 conn.model_download_fut = None
+            return dict(reply or {})
+
+        fut = asyncio.run_coroutine_threadsafe(_ask(), self._loop)
+        try:
+            reply = fut.result(timeout=timeout + 5.0)
+            return {
+                "approved": bool(reply.get("approved")),
+                "reason": str(reply.get("reason") or ""),
+            }
+        except Exception as exc:
+            return {"approved": False, "reason": f"Timed out waiting for approval: {exc}"}
+
+    def request_generation_compute_confirmation(
+        self,
+        risk: dict,
+        target_ws: Any = None,
+        timeout: float = 600.0,
+    ) -> dict:
+        """Ask one ComfyUI tab whether to run generation despite compute risk."""
+        if not self._loop or not self.is_running():
+            return {"approved": False, "reason": "No connected ComfyClaw panel."}
+
+        async def _ask() -> dict:
+            with self._conns_lock:
+                ws = (
+                    target_ws
+                    if target_ws and target_ws in self._conns
+                    else next(iter(self._conns.keys()), None)
+                )
+                conn = self._conns.get(ws) if ws else None
+            if ws is None or conn is None:
+                return {"approved": False, "reason": "No connected ComfyClaw panel."}
+            fut = self._loop.create_future()  # type: ignore[union-attr]
+            if conn.compute_confirm_fut and not conn.compute_confirm_fut.done():
+                conn.compute_confirm_fut.cancel()
+            conn.compute_confirm_fut = fut
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "generation_compute_warning",
+                        "risk": risk,
+                    }
+                )
+            )
+            try:
+                reply = await asyncio.wait_for(fut, timeout=timeout)
+            finally:
+                conn.compute_confirm_fut = None
             return dict(reply or {})
 
         fut = asyncio.run_coroutine_threadsafe(_ask(), self._loop)
@@ -1723,6 +1772,11 @@ class SyncServer:
             if conn.model_download_fut and not conn.model_download_fut.done():
                 conn.model_download_fut.set_result(msg)
                 conn.model_download_fut = None
+
+        elif t == "generation_compute_decision":
+            if conn.compute_confirm_fut and not conn.compute_confirm_fut.done():
+                conn.compute_confirm_fut.set_result(msg)
+                conn.compute_confirm_fut = None
 
         elif t == "chat_message":
             asyncio.ensure_future(self._handle_chat_message(ws, msg))

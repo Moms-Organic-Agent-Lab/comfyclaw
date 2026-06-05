@@ -238,6 +238,26 @@ class EvolutionLog:
         return len(self.entries)
 
 
+@dataclass(frozen=True)
+class ComputeRisk:
+    ok: bool
+    reason: str
+    required_vram_gb: float
+    available_vram_gb: float | None
+    device: str
+    workload: str
+
+    def as_dict(self) -> dict:
+        return {
+            "ok": self.ok,
+            "reason": self.reason,
+            "required_vram_gb": self.required_vram_gb,
+            "available_vram_gb": self.available_vram_gb,
+            "device": self.device,
+            "workload": self.workload,
+        }
+
+
 # ---------------------------------------------------------------------------
 # Harness
 # ---------------------------------------------------------------------------
@@ -516,6 +536,20 @@ class ClawHarness:
                 print(json.dumps(wm.workflow, indent=2)[:3000])
                 self._evolution_log.record(evo)
                 return None
+
+            risk = self._compute_generation_risk(wm.workflow)
+            if not risk.ok:
+                print(f"[ClawHarness] ⚠  Compute risk: {risk.reason}")
+                self._emit_status("awaiting_confirmation", iteration, risk.reason)
+                if not self._confirm_generation_compute_risk(risk):
+                    print("[ClawHarness] ⏭  Generation skipped after compute warning.")
+                    self._emit_status(
+                        "dry_run_done",
+                        iteration,
+                        "Workflow built. Generation skipped after compute warning.",
+                    )
+                    self._evolution_log.record(evo)
+                    return None
 
             # ── Submit with repair loop ────────────────────────────────────
             # When ComfyUI rejects a workflow (HTTP 4xx / execution error),
@@ -810,6 +844,113 @@ class ClawHarness:
         if self.config.generation_timeout > 0:
             return self.config.generation_timeout
         return 2400 if self.config.modality == "video" else 600
+
+    def _compute_generation_risk(self, workflow: dict) -> ComputeRisk:
+        workload, required = self._estimate_workload_requirement(workflow)
+        try:
+            stats = self._client.system_stats(timeout=4)
+        except Exception as exc:  # noqa: BLE001
+            return ComputeRisk(
+                ok=False,
+                reason=f"Could not read ComfyUI compute stats ({exc}). Are you sure you want to generate?",
+                required_vram_gb=required,
+                available_vram_gb=None,
+                device="unknown",
+                workload=workload,
+            )
+
+        devices = stats.get("devices") if isinstance(stats, dict) else None
+        if not isinstance(devices, list) or not devices:
+            return ComputeRisk(
+                ok=False,
+                reason="No GPU device was reported by ComfyUI. Are you sure you want to generate?",
+                required_vram_gb=required,
+                available_vram_gb=None,
+                device="none",
+                workload=workload,
+            )
+
+        best_name = "unknown"
+        best_free = 0.0
+        for dev in devices:
+            if not isinstance(dev, dict):
+                continue
+            name = str(dev.get("name") or dev.get("type") or "device")
+            free = self._vram_gb(
+                dev.get("torch_vram_free")
+                or dev.get("vram_free")
+                or dev.get("vram_total")
+                or dev.get("torch_vram_total")
+            )
+            if free is not None and free > best_free:
+                best_free = free
+                best_name = name
+
+        if best_free <= 0:
+            return ComputeRisk(
+                ok=False,
+                reason="ComfyUI did not report usable free VRAM. Are you sure you want to generate?",
+                required_vram_gb=required,
+                available_vram_gb=None,
+                device=best_name,
+                workload=workload,
+            )
+        if best_free < required:
+            return ComputeRisk(
+                ok=False,
+                reason=(
+                    f"{workload} likely needs about {required:.0f} GB free VRAM, "
+                    f"but {best_name} reports {best_free:.1f} GB free. "
+                    "Are you sure you want to generate?"
+                ),
+                required_vram_gb=required,
+                available_vram_gb=best_free,
+                device=best_name,
+                workload=workload,
+            )
+        return ComputeRisk(
+            ok=True,
+            reason=f"{best_name} reports {best_free:.1f} GB free VRAM.",
+            required_vram_gb=required,
+            available_vram_gb=best_free,
+            device=best_name,
+            workload=workload,
+        )
+
+    def _estimate_workload_requirement(self, workflow: dict) -> tuple[str, float]:
+        blob = json.dumps(workflow, sort_keys=True).lower()
+        if self.config.modality == "video" or any(
+            token in blob for token in ("wan", "animatediff", "video", "vhs_")
+        ):
+            return "Video generation", 16.0
+        if any(token in blob for token in ("flux", "qwen", "wan2", "fp8")):
+            return "Large diffusion model", 10.0
+        if "sdxl" in blob:
+            return "SDXL image generation", 8.0
+        return "Image generation", 4.0
+
+    @staticmethod
+    def _vram_gb(value: object) -> float | None:
+        try:
+            n = float(value)
+        except (TypeError, ValueError):
+            return None
+        if n <= 0:
+            return None
+        return n / (1024**3)
+
+    def _confirm_generation_compute_risk(self, risk: ComputeRisk) -> bool:
+        if self._sync and self._sync.is_running():
+            decision = self._sync.request_generation_compute_confirmation(
+                risk.as_dict(),
+                target_ws=getattr(self, "_sync_ws", None),
+            )
+            return bool(decision.get("approved"))
+        if sys.stdin.isatty():
+            answer = input(f"[ComfyClaw] {risk.reason} [y/N] ").strip().lower()
+            return answer in {"y", "yes"}
+        print("[ClawHarness] No interactive UI is available; proceeding despite compute warning.")
+        return True
 
     def _is_infra_error(self, history: dict) -> bool:
         haystack = "\n".join(

@@ -72,6 +72,15 @@ def _make_harness(
 
 def _mock_comfy_client(image_bytes: bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 20) -> MagicMock:
     client = MagicMock()
+    client.system_stats.return_value = {
+        "devices": [
+            {
+                "name": "cuda:0 test",
+                "type": "cuda",
+                "torch_vram_free": 24 * 1024**3,
+            }
+        ]
+    }
     client.queue_prompt.return_value = {"prompt_id": "test-prompt-id"}
     client.wait_for_completion.return_value = {
         "outputs": {"7": {"images": [{"filename": "test.png", "subfolder": "", "type": "output"}]}}
@@ -102,6 +111,55 @@ class TestDryRun:
         h = _make_harness(minimal_workflow, cfg, agent=mock_agent)
         h.run("a red fox", dry_run=True)
         mock_agent.plan_and_patch.assert_called_once()
+
+
+class TestComputePreflight:
+    def test_low_compute_decline_builds_but_does_not_queue(
+        self, minimal_workflow: dict, cfg: HarnessConfig
+    ) -> None:
+        mock_client = _mock_comfy_client()
+        mock_client.system_stats.return_value = {
+            "devices": [
+                {
+                    "name": "cuda:0 tiny",
+                    "type": "cuda",
+                    "torch_vram_free": 2 * 1024**3,
+                }
+            ]
+        }
+        h = _make_harness(minimal_workflow, cfg, client=mock_client)
+        h._sync = MagicMock()
+        h._sync.is_running.return_value = True
+        h._sync.request_generation_compute_confirmation.return_value = {"approved": False}
+
+        result = h.run("a fox")
+
+        assert result is None
+        h._agent.plan_and_patch.assert_called_once()
+        mock_client.queue_prompt.assert_not_called()
+
+    def test_low_compute_approve_runs_generation(
+        self, minimal_workflow: dict, cfg: HarnessConfig
+    ) -> None:
+        mock_client = _mock_comfy_client()
+        mock_client.system_stats.return_value = {
+            "devices": [
+                {
+                    "name": "cuda:0 tiny",
+                    "type": "cuda",
+                    "torch_vram_free": 2 * 1024**3,
+                }
+            ]
+        }
+        h = _make_harness(minimal_workflow, cfg, client=mock_client)
+        h._sync = MagicMock()
+        h._sync.is_running.return_value = True
+        h._sync.request_generation_compute_confirmation.return_value = {"approved": True}
+
+        result = h.run("a fox")
+
+        assert result is not None
+        mock_client.queue_prompt.assert_called()
 
 
 # ---------------------------------------------------------------------------

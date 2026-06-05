@@ -421,4 +421,5 @@ def _run_envelope(
         dispatch=dispatch,
         on_event=on_event,
         max_rounds=max_rounds,
+        protocol_in_system=True,
     )

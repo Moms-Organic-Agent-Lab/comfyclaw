@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -220,6 +221,87 @@ class TestClaudeEnvironment:
         assert "ANTHROPIC_AUTH_TOKEN" not in env
         assert "ANTHROPIC_BASE_URL" not in env
         assert env["PATH"].split(":")[0] == "/tmp/claude-bin"
+
+
+class TestGeminiCLIBackend:
+    def test_does_not_emit_pretty_json_lines_as_thinking(self) -> None:
+        from comfyclaw.agent_backends.gemini_backend import GeminiCLIBackend
+
+        pretty_json = (
+            '{\n'
+            '  "tool_calls": [\n'
+            '    {"name": "finalize_workflow", "arguments": {"rationale": "done"}}\n'
+            "  ],\n"
+            '  "rationale": "done",\n'
+            '  "done": false\n'
+            "}\n"
+        )
+
+        class _Proc:
+            stdout = StringIO(pretty_json)
+            stderr = StringIO("")
+
+            def wait(self, timeout=None):
+                return 0
+
+        events: list[tuple[str, str]] = []
+
+        with patch("subprocess.Popen", return_value=_Proc()):
+            be = GeminiCLIBackend(model="")
+            rationale = be.run_tool_loop(
+                system="sys",
+                user="user",
+                tools=[],
+                dispatch=lambda call: ("ok", call.name == "finalize_workflow"),
+                on_event=lambda et, content, tool, args: events.append((et, content)),
+            )
+
+        assert rationale == "done"
+        assert not any(et == "thinking" and content.strip() in {"{", "}", "],"} for et, content in events)
+        assert any(et == "tool_call" for et, _content in events)
+
+
+class TestClaudeEnvelope:
+    def test_fallback_does_not_append_empty_tool_protocol_to_prompt(self) -> None:
+        from comfyclaw.agent_backends.claude_code_backend import _run_envelope
+
+        captured: dict[str, object] = {}
+
+        def fake_run(argv, stdin_text, **kwargs):
+            captured["argv"] = argv
+            captured["stdin"] = stdin_text
+            return 0, '{"tool_calls":[],"rationale":"done","done":true}', ""
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "finalize_workflow",
+                    "description": "Finish.",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+
+        with patch("comfyclaw.agent_backends._stream_session.run_cli_oneshot", side_effect=fake_run):
+            rationale = _run_envelope(
+                bin_path="claude",
+                model="sonnet",
+                system="sys",
+                user="user",
+                tools=tools,
+                dispatch=lambda call: ("ok", False),
+                on_event=None,
+                max_rounds=1,
+            )
+
+        assert rationale == "done"
+        stdin_text = str(captured["stdin"])
+        assert "Available tools:" not in stdin_text
+        argv = captured["argv"]
+        assert isinstance(argv, list)
+        system_prompt = argv[argv.index("--system-prompt") + 1]
+        assert "finalize_workflow" in system_prompt
 
     def test_claude_env_can_preserve_external_api_keys(
         self, monkeypatch: pytest.MonkeyPatch

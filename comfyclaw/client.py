@@ -89,6 +89,11 @@ class ComfyClient:
             path = f"/object_info/{urllib.parse.quote(node_class)}"
         return self.get_json(path)
 
+    def system_stats(self, timeout: int = 5) -> dict:
+        """Return ComfyUI /system_stats, including device / VRAM info when available."""
+        data = self.get_json("/system_stats", timeout=timeout)
+        return data if isinstance(data, dict) else {}
+
     # ------------------------------------------------------------------
     # Convenience
     # ------------------------------------------------------------------

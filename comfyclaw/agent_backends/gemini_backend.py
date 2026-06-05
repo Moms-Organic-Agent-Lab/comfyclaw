@@ -105,9 +105,12 @@ class GeminiCLIBackend:
             )
             stderr_thread.start()
 
-            # Stream stdout line by line, surfacing chunks as "thinking"
-            # progress events so the agent log shows life while gemini
-            # generates.  Gemini emits plain prose (no structured events).
+            # Gemini often pretty-prints the JSON envelope one line at a time.
+            # Do not surface raw stdout as thinking events: it creates noisy
+            # one-character blocks like "}" in the UI. The shared envelope loop
+            # emits clean rationale / tool events after parsing.
+            if on_event:
+                on_event("info", "Gemini is preparing a tool plan…", "", None)
             assert proc.stdout is not None
             try:
                 for raw in iter(proc.stdout.readline, ""):
@@ -115,13 +118,6 @@ class GeminiCLIBackend:
                     if not line:
                         continue
                     out_lines.append(line)
-                    if on_event:
-                        on_event(
-                            "thinking",
-                            line[:160] + ("…" if len(line) > 160 else ""),
-                            "",
-                            None,
-                        )
             finally:
                 try:
                     rc = proc.wait(timeout=420)

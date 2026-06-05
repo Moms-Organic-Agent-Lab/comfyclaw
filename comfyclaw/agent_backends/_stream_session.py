@@ -201,13 +201,14 @@ def run_envelope_loop(
     dispatch,  # DispatchFn
     on_event,  # EventFn | None
     max_rounds: int,
+    protocol_in_system: bool = False,
 ) -> str:
     """Drive a CLI agent that doesn't natively support tool-use.
 
     ``invoke(prompt: str) -> str`` is a callable supplied by each backend
     that runs one turn of the CLI and returns the model's raw text output.
     """
-    full_system = system + envelope_protocol_instructions(tools)
+    full_system = system if protocol_in_system else system + envelope_protocol_instructions(tools)
     convo: list[str] = [
         f"<<SYSTEM>>\n{full_system}\n<<END SYSTEM>>",
         f"<<USER>>\n{user}\n<<END USER>>",
