@@ -47,18 +47,22 @@ the verifier's region-level feedback.
 
 Unified input behavior
 ----------------------
-The user has one Cursor-style input box. Decide the intent yourself:
-• If the user asks a question, asks for an explanation, wants a diagnosis, or
-  requests guidance without asking you to change/run the workflow, call
-  answer_user with a concise answer and do not modify the workflow.
-• If the user asks you to create, generate, improve, refine, fix, add, remove,
-  or otherwise change the ComfyUI result/workflow, use the workflow tools below
-  and finish with finalize_workflow.
-• If the request is ambiguous but mentions a desired image/video/result or a
-  refinement direction, prefer improving the workflow.
+The user has one Cursor-style input box that can contain either conversation
+or a workflow request. Your first responsibility is to infer the user's intent
+from the whole message and current workflow context.
+
+If the message is conversational, asks for information, asks for diagnosis, or
+does not clearly ask you to change/build/run the ComfyUI workflow, call
+answer_user with a concise answer and stop. Do not inspect, validate, mutate,
+or finalize the workflow for conversational turns.
+
+If the message asks you to create a new result, run generation, or modify the
+current workflow/output, use the workflow tools below and finish with
+finalize_workflow.
 
 Iteration strategy
 ------------------
+Only after you have decided the user wants workflow work:
 1. Call report_evolution_strategy first: state your plan and the top issue.
 2. Call inspect_workflow to see the current topology.
 3. **If the workflow is empty** (no nodes):
@@ -84,10 +88,11 @@ Iteration strategy
    f. Call validate_workflow to catch wiring errors.
    g. Call finalize_workflow when done (it auto-validates).
 
-Prompt engineering (step 3)
-----------------------------
-The workflow's positive prompt is pre-seeded with the user's raw goal text.
-You MUST replace it with a professional-quality prompt every iteration.
+Prompt engineering
+------------------
+When building or modifying a generation workflow, use set_prompt to write a
+professional-quality positive prompt and a strong negative prompt. Do not do
+this for conversational turns.
 
 Positive prompt — structure:
   [subject & scene], [style], [lighting], [camera/lens], [quality boosters]
@@ -1183,8 +1188,14 @@ class ClawAgent:
         iteration: int,
     ) -> str:
         parts = [
-            f"## Image Goal (user's original request)\n{original_prompt}",
+            f"## User Input\n{original_prompt}",
             f"## Iteration\n{iteration}",
+            (
+                "## Decision Required\n"
+                "First decide whether this input is conversational or requests workflow work. "
+                "For conversational input, call `answer_user` and stop. For workflow work, "
+                "continue with strategy, inspection, edits, validation, and finalization."
+            ),
         ]
 
         # Expose the current positive prompt text so the agent can see exactly
@@ -1201,13 +1212,11 @@ class ClawAgent:
                         break
             if current_positive:
                 parts.append(
-                    f"## Current Positive Prompt (baseline — needs refinement)\n{current_positive}\n\n"
-                    "Use `set_prompt` to replace this with a detailed, high-quality version."
+                    f"## Current Positive Prompt\n{current_positive}\n\n"
+                    "Use this only if you decide the user is asking for workflow work."
                 )
             else:
-                parts.append(
-                    "## Current Positive Prompt\n(none — call `set_prompt` to craft one from the goal above)"
-                )
+                parts.append("## Current Positive Prompt\n(none)")
 
         # Detect the active checkpoint / UNET model from the workflow and surface
         # it prominently so the agent can match it against model-specific skills
@@ -1252,7 +1261,7 @@ class ClawAgent:
         # Hint at relevant skills (names only — full instructions loaded via read_skill)
         # Also suggest model-specific skills based on the active checkpoint name.
         relevant = self.skill_manager.detect_relevant_skills(original_prompt)
-        if workflow_manager and len(workflow_manager.workflow) == 0:
+        if workflow_manager is not None and len(workflow_manager.workflow) == 0:
             if "workflow-builder" not in relevant:
                 relevant.insert(0, "workflow-builder")
         if is_qwen:
@@ -1292,23 +1301,16 @@ class ClawAgent:
         if memory_summary:
             parts.append(f"## Memory / Past Attempts\n{memory_summary}")
 
-        if workflow_manager and len(workflow_manager.workflow) == 0:
+        if workflow_manager is not None and len(workflow_manager.workflow) == 0:
             parts.append(
-                "## CRITICAL — Empty Workflow — You MUST Build From Scratch\n"
-                "The workflow is COMPLETELY EMPTY. You CANNOT finalize without adding nodes.\n\n"
-                '**Step 1:** Call `read_skill("workflow-builder")` — it has complete node-by-node\n'
-                "recipes for every architecture (SD 1.5, SDXL, Flux, Qwen, SD3, HunyuanDiT).\n\n"
-                "**Step 2:** Call `query_available_models('checkpoints')` AND\n"
-                "`query_available_models('diffusion_models')` to discover available models.\n\n"
-                "**Step 3:** Match the model filename to an architecture using the patterns\n"
-                "in the workflow-builder skill, then follow that recipe exactly.\n\n"
-                "**Step 4:** Use ONLY exact filenames from query results — NEVER guess names.\n\n"
-                "**Step 5:** Add nodes ONE AT A TIME using `add_node`. Set detailed prompts.\n\n"
-                "**Step 6:** Call `finalize_workflow` only AFTER all nodes are added and connected."
+                "## Empty Workflow Context\n"
+                "The workflow is empty. If and only if the user is asking for generation or "
+                'workflow construction, build from scratch: read_skill("workflow-builder"), '
+                "query available models, add and connect nodes, set prompts, validate, then "
+                "finalize_workflow. If the input is conversational, answer_user instead."
             )
 
         parts.append(
-            "Begin with report_evolution_strategy, then inspect_workflow, "
-            "apply your changes, then finalize_workflow."
+            "Do not call workflow tools until you have decided the input asks for workflow work."
         )
         return "\n\n".join(parts)

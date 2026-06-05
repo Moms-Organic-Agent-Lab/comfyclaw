@@ -624,6 +624,9 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             trigger_backend = (
                 settings.get("agent_backend") or settings.get("backend") or ""
             ).strip()
+            conversation_history = settings.get("conversation_history")
+            if not isinstance(conversation_history, list):
+                conversation_history = []
 
             # Dry-run / debug mode: agent builds the workflow but ComfyUI is
             # never asked to execute it.  Useful for fast iteration on the
@@ -660,6 +663,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 run_cfg["api_base"] = ""
 
             run_cfg["run_mode"] = run_mode
+            run_cfg["conversation_history"] = conversation_history
 
             # Modality may be selected per-trigger from the panel's video tab.
             trigger_modality = (settings.get("modality") or "").strip().lower()

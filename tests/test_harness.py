@@ -112,6 +112,43 @@ class TestDryRun:
         h.run("a red fox", dry_run=True)
         mock_agent.plan_and_patch.assert_called_once()
 
+    def test_direct_answer_does_not_mutate_or_queue(
+        self, minimal_workflow: dict, cfg: HarnessConfig
+    ) -> None:
+        mock_agent = _mock_agent("Answered.")
+
+        def answer_without_workflow(**_kwargs):
+            mock_agent.last_direct_answer = "Hi. What would you like to make?"
+            return "Answered."
+
+        mock_agent.last_direct_answer = ""
+        mock_agent.plan_and_patch.side_effect = answer_without_workflow
+        mock_client = _mock_comfy_client()
+        h = _make_harness(minimal_workflow, cfg, agent=mock_agent, client=mock_client)
+
+        result = h.run("hi")
+
+        assert result is None
+        assert h.base_workflow["2"]["inputs"]["text"] == "a red fox"
+        mock_client.queue_prompt.assert_not_called()
+
+    def test_conversation_history_is_passed_to_agent(
+        self, minimal_workflow: dict, cfg: HarnessConfig
+    ) -> None:
+        cfg.conversation_history = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "What would you like to make?"},
+        ]
+        mock_agent = _mock_agent()
+        h = _make_harness(minimal_workflow, cfg, agent=mock_agent)
+
+        h.run("make a fox", dry_run=True)
+
+        kwargs = mock_agent.plan_and_patch.call_args.kwargs
+        assert "Conversation History" in kwargs["memory_summary"]
+        assert "User: hi" in kwargs["memory_summary"]
+        assert "Assistant: What would you like to make?" in kwargs["memory_summary"]
+
 
 class TestComputePreflight:
     def test_low_compute_decline_builds_but_does_not_queue(
@@ -707,7 +744,11 @@ class TestPinnedImageModel:
         assert c1.verifier_model == "anthropic/claude-sonnet-4-5"
 
         # Explicit verifier model
-        c2 = HarnessConfig(agent_backend="litellm", model="anthropic/claude-sonnet-4-5", verifier_model="openai/gpt-5.4")
+        c2 = HarnessConfig(
+            agent_backend="litellm",
+            model="anthropic/claude-sonnet-4-5",
+            verifier_model="openai/gpt-5.4",
+        )
         assert c2.verifier_model == "openai/gpt-5.4"
 
         # claude-code agent backend

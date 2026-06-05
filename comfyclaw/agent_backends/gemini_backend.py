@@ -13,7 +13,9 @@ Authentication: the CLI uses ``gemini auth`` or ``GEMINI_API_KEY``.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -22,10 +24,72 @@ from . import _stream_session
 from .base import DispatchFn, EventFn
 
 _GEMINI_BIN_ENV = "COMFYCLAW_GEMINI_BIN"
+_GEMINI_SESSION_BY_KEY: dict[str, str] = {}
+_GEMINI_SESSION_LOCK = threading.Lock()
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{7,255}$")
 
 
 def _gemini_bin() -> str:
     return os.environ.get(_GEMINI_BIN_ENV, "").strip() or "gemini"
+
+
+def _get_recorded_gemini_session(session_key: str) -> str:
+    if not session_key:
+        return ""
+    with _GEMINI_SESSION_LOCK:
+        return _GEMINI_SESSION_BY_KEY.get(session_key, "")
+
+
+def _record_gemini_session(session_key: str, gemini_session_id: str) -> None:
+    if not session_key or not gemini_session_id or not _SESSION_ID_RE.match(gemini_session_id):
+        return
+    with _GEMINI_SESSION_LOCK:
+        _GEMINI_SESSION_BY_KEY[session_key] = gemini_session_id
+
+
+def _extract_stream_json_text(line: str, session_key: str = "") -> str:
+    try:
+        evt = json.loads(line)
+    except json.JSONDecodeError:
+        return line
+    if not isinstance(evt, dict):
+        return line
+
+    etype = str(evt.get("type") or "").lower()
+    if not etype:
+        return line
+    if etype in {"init", "session"}:
+        sid = evt.get("session_id") or evt.get("id")
+        if isinstance(sid, str):
+            _record_gemini_session(session_key, sid)
+        return ""
+
+    if etype == "message":
+        if str(evt.get("role") or "").lower() == "user":
+            return ""
+        content = evt.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(
+                part
+                if isinstance(part, str)
+                else str(part.get("text") or "") if isinstance(part, dict) else ""
+                for part in content
+            )
+        return ""
+
+    if etype in {"content", "chunk"}:
+        if str(evt.get("role") or "").lower() == "user":
+            return ""
+        text = evt.get("text") or evt.get("content") or evt.get("delta")
+        return text if isinstance(text, str) else ""
+
+    if etype == "error":
+        message = evt.get("message") or evt.get("error")
+        return f"Gemini error: {message}" if message else ""
+
+    return ""
 
 
 class GeminiCLIBackend:
@@ -33,8 +97,9 @@ class GeminiCLIBackend:
 
     name = "gemini-cli"
 
-    def __init__(self, model: str = "") -> None:
+    def __init__(self, model: str = "", session_key: str = "") -> None:
         self.model = model
+        self.session_key = session_key
         self._bin = _gemini_bin()
 
     def is_available(self) -> bool:
@@ -63,17 +128,21 @@ class GeminiCLIBackend:
         from comfyclaw.chat_agent import _gemini_pick_model
 
         gemini_model = _gemini_pick_model(self.model)
-        if gemini_model:
-            base_argv: list[str] = [bin_path, "-m", gemini_model, "-p"]
-        else:
-            base_argv = [bin_path, "-p"]
+        def _argv_for_prompt(prompt: str) -> list[str]:
+            argv: list[str] = [bin_path]
+            sid = _get_recorded_gemini_session(self.session_key)
+            if sid:
+                argv += ["--resume", sid]
+            if gemini_model:
+                argv += ["-m", gemini_model]
+            return argv + ["--prompt", prompt, "--output-format", "stream-json"]
 
         # ``NO_COLOR`` keeps ANSI styling out of stdout so we don't have
         # to strip it before feeding the text to the envelope parser.
         env = {**os.environ, "NO_COLOR": "1"}
 
         def _invoke(prompt: str) -> str:
-            argv = base_argv + [prompt]
+            argv = _argv_for_prompt(prompt)
             try:
                 proc = subprocess.Popen(
                     argv,
@@ -87,7 +156,7 @@ class GeminiCLIBackend:
             except FileNotFoundError as exc:
                 raise RuntimeError(f"gemini not on PATH: {exc}") from exc
 
-            out_lines: list[str] = []
+            out_parts: list[str] = []
             stderr_lines: list[str] = []
             stderr_done = threading.Event()
 
@@ -117,7 +186,9 @@ class GeminiCLIBackend:
                     line = raw.rstrip("\n")
                     if not line:
                         continue
-                    out_lines.append(line)
+                    text = _extract_stream_json_text(line, self.session_key)
+                    if text:
+                        out_parts.append(text)
             finally:
                 try:
                     rc = proc.wait(timeout=420)
@@ -126,7 +197,7 @@ class GeminiCLIBackend:
                     rc = -9
                 stderr_done.wait(timeout=2.0)
 
-            text = "\n".join(out_lines).strip()
+            text = "".join(out_parts).strip()
             if rc != 0 and not text:
                 tail = "\n".join(stderr_lines[-12:]).strip() or "no stderr"
                 raise RuntimeError(f"gemini rc={rc}: {tail[:300]}")

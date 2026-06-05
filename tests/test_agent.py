@@ -173,14 +173,19 @@ class TestDispatch:
         assert stop is False
         assert "requires user approval" in result
 
-    def test_download_model_weights_downloads_after_approval(self, wm: WorkflowManager, tmp_path) -> None:
+    def test_download_model_weights_downloads_after_approval(
+        self, wm: WorkflowManager, tmp_path
+    ) -> None:
         agent = _make_agent()
         agent.model_download_callback = lambda req: {"approved": True, "reason": "ok"}
 
-        with patch.dict("os.environ", {"COMFYUI_DIR": str(tmp_path)}), patch(
-            "comfyclaw.agent.download_model_from_url",
-            return_value=tmp_path / "models" / "loras" / "model.safetensors",
-        ) as mock_download:
+        with (
+            patch.dict("os.environ", {"COMFYUI_DIR": str(tmp_path)}),
+            patch(
+                "comfyclaw.agent.download_model_from_url",
+                return_value=tmp_path / "models" / "loras" / "model.safetensors",
+            ) as mock_download,
+        ):
             result, stop = agent._dispatch(
                 "download_model_weights",
                 {
@@ -194,6 +199,26 @@ class TestDispatch:
         assert stop is False
         assert "Downloaded model weights" in result
         mock_download.assert_called_once()
+
+
+class TestAgentIntentPrompt:
+    def test_user_message_keeps_intent_decision_before_empty_workflow_build(self) -> None:
+        agent = _make_agent()
+        wm = WorkflowManager({})
+
+        msg = agent._build_user_message(
+            original_prompt="hi",
+            workflow_manager=wm,
+            verifier_feedback=None,
+            memory_summary=None,
+            iteration=1,
+        )
+
+        assert "## User Input\nhi" in msg
+        assert "Image Goal" not in msg
+        assert "answer_user" in msg
+        assert "You MUST Build From Scratch" not in msg
+        assert "If and only if" in msg
 
 
 # ---------------------------------------------------------------------------

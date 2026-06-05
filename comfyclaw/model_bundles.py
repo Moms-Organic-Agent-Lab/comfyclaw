@@ -169,7 +169,9 @@ def model_url_target(comfyui_dir: Path, dest_subdir: str, filename: str) -> Path
     return comfyui_dir / "models" / dest_subdir / safe_model_filename(filename)
 
 
-def huggingface_model_file_from_url(url: str, dest_subdir: str, filename: str | None = None) -> ModelFile | None:
+def huggingface_model_file_from_url(
+    url: str, dest_subdir: str, filename: str | None = None
+) -> ModelFile | None:
     """Parse common Hugging Face file URLs into a ModelFile, or None."""
     parsed = urllib.parse.urlparse(url.strip())
     if parsed.netloc.lower() not in {"huggingface.co", "www.huggingface.co"}:

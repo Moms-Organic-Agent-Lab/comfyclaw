@@ -90,7 +90,7 @@ def test_human_reject_does_not_write(tmp_path: Path, monkeypatch) -> None:
 
 def test_llm_none_is_respected(tmp_path: Path, monkeypatch) -> None:
     reg = _registry(tmp_path, monkeypatch)
-    evolver = SkillEvolver(reg, complete=lambda _p, _m: "{\"action\":\"none\"}")
+    evolver = SkillEvolver(reg, complete=lambda _p, _m: '{"action":"none"}')
     result = evolver.maybe_evolve(
         prompt="test",
         memory=_memory(),

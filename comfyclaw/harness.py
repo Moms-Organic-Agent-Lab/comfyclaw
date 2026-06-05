@@ -108,7 +108,9 @@ def resolve_verifier_model(
 
     # 6. Check if the model indicates Gemini
     elif "gemini" in raw_lower or "google" in raw_lower:
-        if "/" in raw_model and ("gemini-2.0" in raw_lower or "gemini-2.5" in raw_lower or "gemini-1.5" in raw_lower):
+        if "/" in raw_model and (
+            "gemini-2.0" in raw_lower or "gemini-2.5" in raw_lower or "gemini-1.5" in raw_lower
+        ):
             return raw_model
         return "gemini/gemini-2.0-flash"
 
@@ -119,7 +121,6 @@ def resolve_verifier_model(
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-
 
 
 @dataclass
@@ -174,6 +175,7 @@ class HarnessConfig:
     skill_evolution_min_confidence: float = 0.55
     skill_evolution_auto_apply: bool = False
     agent_session_id: str = ""
+    conversation_history: list[dict[str, str]] = field(default_factory=list)
     """
     Pin the image-generation model (checkpoint / UNET) used by ComfyUI.
 
@@ -195,7 +197,6 @@ class HarnessConfig:
             self.model,
             self.agent_backend,
         )
-
 
 
 # ---------------------------------------------------------------------------
@@ -469,14 +470,6 @@ class ClawHarness:
                     partial[nid] = copy.deepcopy(start_wf[nid])
                     self._sync.broadcast(copy.deepcopy(partial), target_ws=_ws)
 
-            # Seed the user's prompt into every CLIPTextEncode-family node
-            # connected to a sampler's positive input.
-            pos_injected, _ = wm.inject_prompt(positive=prompt)
-            if pos_injected:
-                print(f"[ClawHarness] 📝 Seeded user prompt into encoder node(s) {pos_injected}")
-                if self._sync:
-                    self._sync.broadcast(wm.to_dict(), target_ws=_ws)
-
             node_ids_before = set(wm.workflow.keys())
 
             # ── Agent evolves the workflow ─────────────────────────────────
@@ -492,6 +485,11 @@ class ClawHarness:
             memory_summary = (
                 self._memory.format_history_for_agent() if self._memory.attempts else None
             )
+            conversation_summary = self._format_conversation_history()
+            if conversation_summary and memory_summary:
+                memory_summary = f"{conversation_summary}\n\n{memory_summary}"
+            elif conversation_summary:
+                memory_summary = conversation_summary
 
             print("[ClawHarness] 🤖 Agent is evolving the workflow…")
             rationale = self._agent.plan_and_patch(
@@ -938,6 +936,26 @@ class ClawHarness:
         if n <= 0:
             return None
         return n / (1024**3)
+
+    def _format_conversation_history(self) -> str | None:
+        history = self.config.conversation_history
+        if not isinstance(history, list) or not history:
+            return None
+        lines: list[str] = []
+        for item in history[-12:]:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "").strip().lower()
+            if role not in {"user", "assistant"}:
+                continue
+            content = str(item.get("content") or "").strip()
+            if not content:
+                continue
+            label = "User" if role == "user" else "Assistant"
+            lines.append(f"{label}: {content[:4000]}")
+        if not lines:
+            return None
+        return "## Conversation History (same ComfyClaw session)\n" + "\n".join(lines)
 
     def _confirm_generation_compute_risk(self, risk: ComputeRisk) -> bool:
         if self._sync and self._sync.is_running():

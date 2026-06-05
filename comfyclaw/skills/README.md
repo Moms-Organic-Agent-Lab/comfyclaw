@@ -66,6 +66,7 @@ Recommended sections in the body:
 | `hires-fix`             |  51 | Second-pass upscale-and-refine for detail recovery |
 | `inpainting`            | 141 | Region-only editing with masks (`VAEEncodeForInpaint` vs `SetLatentNoiseMask`) |
 | `lora-enhancement`      |  71 | Inject LoRA adapters to fix defects the base model cannot |
+| `model-downloader`      |  65 | Detect missing ComfyUI model weights and request user-approved downloads |
 | `negative-prompts`      | 169 | Build defect-targeted negative prompts; family-specific gotchas |
 | `photorealistic`        |  51 | Camera-realistic prompts + sampler tuning |
 | `prompt-artist`         |  67 | Rewrite flat prompts into vivid artistic language |
@@ -75,6 +76,8 @@ Recommended sections in the body:
 | `skill-creator`         | 485 | Meta-skill: build, test, and benchmark new skills |
 | `spatial`               |  45 | Rewrite prompts to encode spatial relationships explicitly |
 | `text-rendering`        |  58 | Restructure prompts for accurate in-image text |
+| `video-builder`         |  80 | Architecture recipes for building ComfyUI video-generation workflows from scratch |
+| `wan-video-2.2`         | 164 | Configuration guide for Wan2.2 text-to-video and image-to-video model |
 | `workflow-builder`      | 440 | Build a complete txt2img / SDXL / Flux / DiT workflow from scratch |
 | `workflow-guardrails`   | 175 | Preflight wiring / enum / parameter checks for validation safety |
 

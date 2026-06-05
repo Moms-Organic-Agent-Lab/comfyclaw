@@ -96,6 +96,7 @@ let _chatHistory = [];   // [{role, content}]
 let _chatMsgIdSeq = 0;
 let _chatStreaming = false;
 let _thinkingChatMsgId = null;  // message_id of the current streaming reply in the log
+let _lastAgentDirectAnswer = "";
 
 // ── Generation state ──────────────────────────────────────────────────────────
 let _isGenerating = false;
@@ -1440,6 +1441,24 @@ function _captureCurrentSession() {
     sess.workflowId = name;
   }
   _persistSessions();
+}
+
+function _recordSessionMessage(role, content) {
+  const text = _asStr(content).trim();
+  if (!text) return;
+  _chatHistory.push({ role, content: text });
+  const sess = _activeSession();
+  if (sess) {
+    sess.chatHistory = [..._chatHistory];
+    _persistSessions();
+  }
+}
+
+function _recentSessionMessages(limit = 12) {
+  return _chatHistory
+    .filter((m) => m && (m.role === "user" || m.role === "assistant") && _asStr(m.content).trim())
+    .slice(-limit)
+    .map((m) => ({ role: m.role, content: _asStr(m.content).trim().slice(0, 4000) }));
 }
 
 function _applySession(sessionId) {
@@ -4126,6 +4145,7 @@ function createComfyClawPanel() {
       ? _cliModelFor(agentBackend)
       : panel.querySelector("#comfyclaw-gen-model").value;
     const modality = _modalityToggleRef?.value() || "image";
+    _lastAgentDirectAnswer = "";
     _activeSyncClient.ws.send(JSON.stringify({
       type: "trigger_generation",
       connection_id: _CONNECTION_ID,
@@ -4146,6 +4166,7 @@ function createComfyClawPanel() {
           : (_pp.api_key || panel.querySelector("#comfyclaw-gen-apikey").value.trim() || undefined),
         api_base: _agentIsCli ? undefined : (_pp.api_base || undefined),
         dry_run: dryRun,
+        conversation_history: _recentSessionMessages(),
         // Always pin modality explicitly so a `comfyclaw serve-video` server
         // default doesn't bleed into image triggers and vice versa.
         modality,
@@ -4158,7 +4179,6 @@ function createComfyClawPanel() {
       dryRun ? `Debug mode (${runMode}) — building workflow only…`
         : `Waiting for agent (${runMode})…`
     );
-    clearAgentLog();
     if (_historyTabRef) {
       _historyTabRef.startRun({ prompt, mode: dryRun ? `${runMode} · debug` : runMode });
     }
@@ -4317,6 +4337,8 @@ function createComfyClawPanel() {
       }
       chatInput.value = "";
       chatInput.style.height = "auto";
+      _recordSessionMessage("user", text);
+      appendAgentLog({ event_type: "user", content: text, timestamp: Date.now() / 1000 });
       if (_activeSession()?.setupLocked || _nodeCount > 0 || (!strategyTouched && _workflowNodeCount(canvasWorkflow) > 0)) {
         panel.querySelector('#comfyclaw-gen-mode [data-mode="improve"]')?.click();
       }
@@ -4329,39 +4351,7 @@ function createComfyClawPanel() {
     chatInput.value = "";
     // Auto-resize back
     chatInput.style.height = "auto";
-    if (_isGenerating) {
-      _activeSyncClient.ws.send(JSON.stringify({ type: "user_refinement", text }));
-    } else {
-      _chatHistory.push({ role: "user", content: text });
-      const msgId = `chat_${++_chatMsgIdSeq}`;
-      _chatStreaming = true; chatSend.disabled = true;
-      _thinkingChatMsgId = msgId;
-      appendAgentLog({ event_type: "assistant_stream", content: "", timestamp: Date.now() / 1000, message_id: msgId });
-      const _cpp = _activeProvPayload();
-      const _be = _activeBackendId();
-      // CLI backends carry their own per-backend model id (Claude /
-      // Codex / Gemini); LiteLLM uses the <select>'s value.  Sending
-      // an empty string is fine — the server falls back to its default.
-      const _model = _isCliBackend(_be)
-        ? _cliModelFor(_be)
-        : (panel.querySelector("#comfyclaw-gen-model").value.trim() || undefined);
-      _activeSyncClient.ws.send(JSON.stringify({
-        type: "chat_message",
-        message_id: msgId,
-        session_id: _activeSessionId,
-        workflow: await exportCurrentWorkflow(),
-        messages: _chatHistory,
-        images: _chatImageAttachments,
-        model: _model,
-        api_key: _isCliBackend(_be)
-          ? undefined
-          : (_cpp.api_key || panel.querySelector("#comfyclaw-gen-apikey").value.trim() || undefined),
-        api_base: _isCliBackend(_be) ? undefined : (_cpp.api_base || undefined),
-        agent_backend: _be,
-      }));
-      _chatImageAttachments = [];
-      _renderAttachmentBar();
-    }
+    _activeSyncClient.ws.send(JSON.stringify({ type: "user_refinement", text }));
   }
 
   chatSend.addEventListener("click", sendFromPanel);
@@ -6334,11 +6324,15 @@ class SyncClient {
       const elapsedStr = elapsed > 0 ? ` · ${elapsed}s` : "";
       if (msg.answer) {
         setGenStatus("complete", `Answered${elapsedStr}`);
-        appendAgentLog({
-          event_type: "assistant_done",
-          content: msg.answer,
-          timestamp: Date.now() / 1000,
-        });
+        if (_asStr(msg.answer).trim() !== _lastAgentDirectAnswer) {
+          appendAgentLog({
+            event_type: "assistant_done",
+            content: msg.answer,
+            timestamp: Date.now() / 1000,
+          });
+        }
+        _recordSessionMessage("assistant", msg.answer);
+        _lastAgentDirectAnswer = "";
         return;
       }
       // Distinguish a dry-run (no image returned) from a real completion.
@@ -6584,6 +6578,9 @@ class SyncClient {
       appendAgentLog({ event_type: "error", content: msg.error, timestamp: Date.now() / 1000 });
       console.error("[ComfyClaw] Generation error:", msg.error);
     } else if (msg.type === "agent_event") {
+      if (msg.event_type === "assistant_done") {
+        _lastAgentDirectAnswer = _asStr(msg.content).trim();
+      }
       appendAgentLog(msg);
 
       // ── Chat streaming ────────────────────────────────────────────────────────

@@ -214,3 +214,8 @@ uv run comfyclaw run --help
 uv run comfyclaw node-path
 uv run comfyclaw doctor
 ```
+
+## Further Reading
+
+- [`REPRODUCING.md`](REPRODUCING.md) — Step-by-step reproduction instructions for paper experiments.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — Mapping paper concepts directly to classes and code symbols in the source tree.

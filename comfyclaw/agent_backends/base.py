@@ -191,7 +191,10 @@ def get_backend(
     elif name in ("gemini-cli", "gemini"):
         from .gemini_backend import GeminiCLIBackend
 
-        be = GeminiCLIBackend(model=model or extra.get("model", ""))
+        be = GeminiCLIBackend(
+            model=model or extra.get("model", ""),
+            session_key=str(extra.get("session_id") or ""),
+        )
         if be.is_available():
             _check_cli_auth("gemini-cli")
             return be

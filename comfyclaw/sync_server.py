@@ -1564,7 +1564,7 @@ class SyncServer:
         model: str = (msg.get("model") or "").strip() or self._model
         api_key: str | None = (msg.get("api_key") or "").strip() or self._api_key
         api_base: str | None = (msg.get("api_base") or "").strip() or None
-        backend = ((msg.get("agent_backend") or "").strip().lower() or "litellm")
+        backend = (msg.get("agent_backend") or "").strip().lower() or "litellm"
         if backend in {"claude-code", "codex", "gemini-cli"}:
             api_key = None
             api_base = None

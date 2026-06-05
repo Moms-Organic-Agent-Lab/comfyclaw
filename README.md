@@ -17,10 +17,12 @@
 </p>
 
 
-<!-- [![CI](https://github.com/Moms-Organic-Agent-Lab/comfyclaw/actions/workflows/ci.yml/badge.svg)](https://github.com/Moms-Organic-Agent-Lab/comfyclaw/actions/workflows/ci.yml)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://python.org)
-[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) -->
+<p align="center">
+  <a href="https://arxiv.org/abs/coming_soon"><img src="https://img.shields.io/badge/arXiv-coming_soon-red" alt="arXiv"></a>
+  <a href="https://python.org"><img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+"></a>
+  <a href="https://github.com/astral-sh/uv"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json" alt="uv"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+</p>
 
 ComfyClaw is the reference implementation of the paper
 *“An Agentic Harness for Skill-Evolving Image Generation Workflows”*
@@ -44,9 +46,9 @@ images, and accumulates **318 evolved skills** that account for roughly
 half of all later skill reads. See [Results at a glance](#results-at-a-glance)
 or the paper for the full tables.
 
-> 📄 **Paper:** *An Agentic Harness for Skill-Evolving Image Generation Workflows.*
-> Citation block — see [Citing ComfyClaw](#citing-comfyclaw) below or
-> [`CITATION.cff`](CITATION.cff).
+> [!NOTE]
+> **Paper:** *An Agentic Harness for Skill-Evolving Image Generation Workflows.*
+> See [Citing ComfyClaw](#citing-comfyclaw) below or [`CITATION.cff`](CITATION.cff) for the citation format.
 
 ### Key features
 
@@ -182,6 +184,9 @@ uv run comfyclaw install-node
 uv run comfyclaw serve
 ```
 
+> [!IMPORTANT]
+> Make sure to configure your LLM provider API key (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY`) in the `.env` file before running the server, or check [`docs/LOCAL_LLM_AND_MODELS.md`](docs/LOCAL_LLM_AND_MODELS.md) to set up a local model.
+
 Open ComfyUI, usually `http://127.0.0.1:8188`. The ComfyClaw panel appears in
 the ComfyUI UI. Enter a prompt, choose **Scratch** or **Improve**, and click
 **Generate**.
@@ -227,8 +232,8 @@ cp .env.example .env
 $EDITOR .env
 ```
 
-Set `COMFYUI_ADDR`, optionally `COMFYUI_DIR`, and either a LiteLLM provider key
-or a CLI backend. `.env` is loaded automatically; CLI flags override it.
+> [!NOTE]
+> Set `COMFYUI_ADDR` (e.g. `127.0.0.1:8188`), optionally `COMFYUI_DIR`, and either a LiteLLM provider key or a CLI backend. The `.env` file is loaded automatically; CLI flags override it.
 
 ### Install the ComfyUI plugin
 
@@ -239,9 +244,8 @@ uv run comfyclaw install-node
 uv run comfyclaw install-node --comfyui-dir /path/to/ComfyUI
 ```
 
-Restart ComfyUI after installation. For remote/deployed ComfyUI, copy the
-directory printed by `uv run comfyclaw node-path` into the remote
-`custom_nodes/ComfyClaw-Sync` directory and restart that server.
+> [!IMPORTANT]
+> **Restart ComfyUI** after installing the node plugin. For remote/deployed ComfyUI instances, copy the directory printed by `uv run comfyclaw node-path` into the remote `custom_nodes/ComfyClaw-Sync` directory and restart that remote server.
 
 ```bash
 uv run comfyclaw doctor

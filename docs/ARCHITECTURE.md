@@ -159,7 +159,7 @@ import-from-`git`-URL flow as any other skill.
 | Skill-CRUD messages | `comfyclaw/sync_server.py` | handlers in `_handle_message` |
 
 The full inventory of server → client and client → server message types is
-in the README under [Architecture › WebSocket protocol](../README.md#websocket-protocol).
+documented in the docstring at the top of [comfyclaw/sync_server.py](../comfyclaw/sync_server.py).
 
 ## 8. Memory
 

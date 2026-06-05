@@ -228,7 +228,7 @@ class TestGeminiCLIBackend:
         from comfyclaw.agent_backends.gemini_backend import GeminiCLIBackend
 
         pretty_json = (
-            '{\n'
+            "{\n"
             '  "tool_calls": [\n'
             '    {"name": "finalize_workflow", "arguments": {"rationale": "done"}}\n'
             "  ],\n"
@@ -257,8 +257,61 @@ class TestGeminiCLIBackend:
             )
 
         assert rationale == "done"
-        assert not any(et == "thinking" and content.strip() in {"{", "}", "],"} for et, content in events)
+        assert not any(
+            et == "thinking" and content.strip() in {"{", "}", "],"} for et, content in events
+        )
         assert any(et == "tool_call" for et, _content in events)
+
+    def test_records_and_resumes_gemini_session(self) -> None:
+        from comfyclaw.agent_backends.gemini_backend import GeminiCLIBackend
+
+        sid = "gemini-session-abc123"
+        envelope = json.dumps(
+            {
+                "tool_calls": [
+                    {"name": "finalize_workflow", "arguments": {"rationale": "done"}}
+                ],
+                "rationale": "done",
+                "done": False,
+            }
+        )
+        stdout = "\n".join(
+            [
+                json.dumps({"type": "session", "session_id": sid}),
+                json.dumps({"type": "message", "role": "assistant", "content": envelope}),
+                "",
+            ]
+        )
+        argv_calls: list[list[str]] = []
+
+        class _Proc:
+            def __init__(self) -> None:
+                self.stdout = StringIO(stdout)
+                self.stderr = StringIO("")
+
+            def wait(self, timeout=None):
+                return 0
+
+        def fake_popen(argv, **_kwargs):
+            argv_calls.append(list(argv))
+            return _Proc()
+
+        be = GeminiCLIBackend(model="", session_key="comfyclaw-gemini-session-test")
+        with patch("subprocess.Popen", side_effect=fake_popen):
+            for _ in range(2):
+                assert (
+                    be.run_tool_loop(
+                        system="sys",
+                        user="user",
+                        tools=[],
+                        dispatch=lambda call: ("ok", call.name == "finalize_workflow"),
+                        on_event=None,
+                    )
+                    == "done"
+                )
+
+        assert "--resume" not in argv_calls[0]
+        assert argv_calls[1][1:3] == ["--resume", sid]
 
 
 class TestClaudeEnvelope:
@@ -283,7 +336,9 @@ class TestClaudeEnvelope:
             }
         ]
 
-        with patch("comfyclaw.agent_backends._stream_session.run_cli_oneshot", side_effect=fake_run):
+        with patch(
+            "comfyclaw.agent_backends._stream_session.run_cli_oneshot", side_effect=fake_run
+        ):
             rationale = _run_envelope(
                 bin_path="claude",
                 model="sonnet",
@@ -358,8 +413,24 @@ class TestCodexSessionReuse:
         from comfyclaw.agent_backends.codex_backend import _extract_codex_session_id
 
         sid = "123e4567-e89b-12d3-a456-426614174000"
-        assert _extract_codex_session_id(f'{{"type":"session.created","session_id":"{sid}"}}') == sid
+        assert (
+            _extract_codex_session_id(f'{{"type":"session.created","session_id":"{sid}"}}') == sid
+        )
         assert _extract_codex_session_id(f'{{"thread":{{"id":"{sid}"}}}}') == sid
+
+    def test_extracts_non_uuid_codex_session_id_from_events(self) -> None:
+        from comfyclaw.agent_backends.codex_backend import _extract_codex_session_id
+
+        assert (
+            _extract_codex_session_id(
+                '{"type":"thread.started","thread":{"id":"thread_abc123xyz"}}'
+            )
+            == "thread_abc123xyz"
+        )
+        assert (
+            _extract_codex_session_id('{"session_id":"sess:2026-06-04:abcdef123456"}')
+            == "sess:2026-06-04:abcdef123456"
+        )
 
     def test_records_codex_session_per_comfyclaw_session(self) -> None:
         from comfyclaw.agent_backends.codex_backend import (

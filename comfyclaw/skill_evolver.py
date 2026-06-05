@@ -208,7 +208,7 @@ class SkillEvolver:
             "skill, preserve its scope and add only the newly supported lesson.\n\n"
             "Return ONLY JSON with keys: action ('create' or 'refine'), name, description, "
             "body, rationale, evidence (array), confidence (0-1). If no update is needed, "
-            "return {\"action\":\"none\",\"confidence\":0,\"rationale\":\"...\"}.\n\n"
+            'return {"action":"none","confidence":0,"rationale":"..."}.\n\n'
             f"User prompt:\n{prompt}\n\n"
             f"Existing skills:\n{skill_brief or '(none)'}\n\n"
             f"Attempt history:\n{memory.format_history_for_agent()}\n\n"
@@ -234,7 +234,9 @@ class SkillEvolver:
         memory: ClawMemory,
         evidence: list[str],
     ) -> SkillEvolutionProposal | None:
-        good_cases = [a for a in memory.attempts if a.feedback_case == "good case" and a.evolve_requested]
+        good_cases = [
+            a for a in memory.attempts if a.feedback_case == "good case" and a.evolve_requested
+        ]
         if good_cases:
             best = max(good_cases, key=lambda a: a.verifier_score)
             slug = _slugify("good-case-" + " ".join(re.findall(r"[a-zA-Z0-9]+", prompt)[:4]))
@@ -313,15 +315,15 @@ class SkillEvolver:
         lines: list[str] = []
         for attempt in memory.attempts:
             if attempt.feedback_case:
-                comment = f" Comment: {attempt.feedback_comment}" if attempt.feedback_comment else ""
+                comment = (
+                    f" Comment: {attempt.feedback_comment}" if attempt.feedback_comment else ""
+                )
                 lines.append(
                     f"Attempt {attempt.iteration} human-labeled {attempt.feedback_case} "
                     f"(rating={attempt.feedback_rating}, evolve={attempt.evolve_requested}).{comment}"
                 )
             if attempt.failed:
-                lines.append(
-                    f"Attempt {attempt.iteration} failed: {', '.join(attempt.failed[:3])}"
-                )
+                lines.append(f"Attempt {attempt.iteration} failed: {', '.join(attempt.failed[:3])}")
             if attempt.experience:
                 lines.append(f"Attempt {attempt.iteration} lesson: {attempt.experience}")
         best = memory.best_attempt()

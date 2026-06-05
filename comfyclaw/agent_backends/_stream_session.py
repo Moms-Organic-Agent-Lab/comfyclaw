@@ -216,7 +216,7 @@ def run_envelope_loop(
     rationale = "(no rationale provided)"
 
     if on_event:
-        on_event("info", f"Starting {backend_name} session", "", None)
+        on_event("info", f"Starting {backend_name} turn", "", None)
 
     for _round_idx in range(1, max_rounds + 1):
         prompt = "\n\n".join(convo)

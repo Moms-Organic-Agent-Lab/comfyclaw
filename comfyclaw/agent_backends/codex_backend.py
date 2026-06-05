@@ -43,6 +43,7 @@ _UUID_RE = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
 )
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{7,255}$")
 _CODEX_SESSION_BY_KEY: dict[str, str] = {}
 _CODEX_SESSION_LOCK = threading.Lock()
 
@@ -115,6 +116,13 @@ def _extract_codex_session_id(line: str) -> str:
     except json.JSONDecodeError:
         return ""
 
+    def _valid_session_id(value: str) -> str:
+        value = value.strip()
+        m = _UUID_RE.search(value)
+        if m:
+            return m.group(0)
+        return value if _SESSION_ID_RE.match(value) else ""
+
     direct_keys = (
         "session_id",
         "conversation_id",
@@ -128,17 +136,17 @@ def _extract_codex_session_id(line: str) -> str:
             for key in direct_keys:
                 val = cur.get(key)
                 if isinstance(val, str):
-                    m = _UUID_RE.search(val)
-                    if m:
-                        return m.group(0)
+                    sid = _valid_session_id(val)
+                    if sid:
+                        return sid
             for parent_key in ("session", "conversation", "thread"):
                 nested = cur.get(parent_key)
                 if isinstance(nested, dict):
                     val = nested.get("id")
                     if isinstance(val, str):
-                        m = _UUID_RE.search(val)
-                        if m:
-                            return m.group(0)
+                        sid = _valid_session_id(val)
+                        if sid:
+                            return sid
             stack.extend(cur.values())
         elif isinstance(cur, list):
             stack.extend(cur)
