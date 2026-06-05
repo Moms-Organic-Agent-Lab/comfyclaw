@@ -237,16 +237,19 @@ class TestGeminiCLIBackend:
             "}\n"
         )
 
-        class _Proc:
-            stdout = StringIO(pretty_json)
-            stderr = StringIO("")
+        class _FakeAcpClient:
+            def has_session(self, _session_key: str) -> bool:
+                return False
 
-            def wait(self, timeout=None):
-                return 0
+            def prompt(self, **_kwargs):
+                return pretty_json
 
         events: list[tuple[str, str]] = []
 
-        with patch("subprocess.Popen", return_value=_Proc()):
+        with patch(
+            "comfyclaw.agent_backends.gemini_backend._get_acp_client",
+            return_value=_FakeAcpClient(),
+        ):
             be = GeminiCLIBackend(model="")
             rationale = be.run_tool_loop(
                 system="sys",
@@ -262,10 +265,9 @@ class TestGeminiCLIBackend:
         )
         assert any(et == "tool_call" for et, _content in events)
 
-    def test_records_and_resumes_gemini_session(self) -> None:
+    def test_reuses_long_lived_gemini_acp_session(self) -> None:
         from comfyclaw.agent_backends.gemini_backend import GeminiCLIBackend
 
-        sid = "gemini-session-abc123"
         envelope = json.dumps(
             {
                 "tool_calls": [
@@ -275,29 +277,28 @@ class TestGeminiCLIBackend:
                 "done": False,
             }
         )
-        stdout = "\n".join(
-            [
-                json.dumps({"type": "session", "session_id": sid}),
-                json.dumps({"type": "message", "role": "assistant", "content": envelope}),
-                "",
-            ]
-        )
-        argv_calls: list[list[str]] = []
+        events: list[tuple[str, str]] = []
 
-        class _Proc:
+        class _FakeAcpClient:
             def __init__(self) -> None:
-                self.stdout = StringIO(stdout)
-                self.stderr = StringIO("")
+                self.prompts: list[str] = []
+                self._has_session = False
 
-            def wait(self, timeout=None):
-                return 0
+            def has_session(self, _session_key: str) -> bool:
+                return self._has_session
 
-        def fake_popen(argv, **_kwargs):
-            argv_calls.append(list(argv))
-            return _Proc()
+            def prompt(self, **kwargs):
+                self.prompts.append(kwargs["prompt"])
+                self._has_session = True
+                return envelope
+
+        fake_client = _FakeAcpClient()
 
         be = GeminiCLIBackend(model="", session_key="comfyclaw-gemini-session-test")
-        with patch("subprocess.Popen", side_effect=fake_popen):
+        with patch(
+            "comfyclaw.agent_backends.gemini_backend._get_acp_client",
+            return_value=fake_client,
+        ):
             for _ in range(2):
                 assert (
                     be.run_tool_loop(
@@ -305,13 +306,54 @@ class TestGeminiCLIBackend:
                         user="user",
                         tools=[],
                         dispatch=lambda call: ("ok", call.name == "finalize_workflow"),
-                        on_event=None,
+                        on_event=lambda et, content, tool, args: events.append((et, content)),
                     )
                     == "done"
                 )
 
-        assert "--resume" not in argv_calls[0]
-        assert argv_calls[1][1:3] == ["--resume", sid]
+        assert len(fake_client.prompts) == 2
+        info_events = [content for et, content in events if et == "info"]
+        assert "Starting Gemini ACP session" in info_events
+        assert "Continuing Gemini session" in info_events
+
+    def test_gemini_acp_client_collects_agent_message_chunks(self) -> None:
+        from comfyclaw.agent_backends.gemini_backend import (
+            _AcpSessionState,
+            _GeminiAcpClient,
+        )
+
+        client = _GeminiAcpClient("gemini", "/tmp")
+        state = _AcpSessionState(acp_session_id="sid-1")
+        client._sessions_by_acp_id["sid-1"] = state
+
+        client._handle_message(
+            {
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": {
+                    "sessionId": "sid-1",
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": "hello"},
+                    },
+                },
+            }
+        )
+        client._handle_message(
+            {
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": {
+                    "sessionId": "sid-1",
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": " world"},
+                    },
+                },
+            }
+        )
+
+        assert "".join(state.text_chunks) == "hello world"
 
 
 class TestClaudeEnvelope:
@@ -416,11 +458,16 @@ class TestCodexSessionReuse:
         assert (
             _extract_codex_session_id(f'{{"type":"session.created","session_id":"{sid}"}}') == sid
         )
+        assert _extract_codex_session_id(f'{{"type":"thread.started","id":"{sid}"}}') == sid
         assert _extract_codex_session_id(f'{{"thread":{{"id":"{sid}"}}}}') == sid
 
     def test_extracts_non_uuid_codex_session_id_from_events(self) -> None:
         from comfyclaw.agent_backends.codex_backend import _extract_codex_session_id
 
+        assert (
+            _extract_codex_session_id('{"type":"thread.started","id":"thread_abc123xyz"}')
+            == "thread_abc123xyz"
+        )
         assert (
             _extract_codex_session_id(
                 '{"type":"thread.started","thread":{"id":"thread_abc123xyz"}}'
@@ -443,3 +490,64 @@ class TestCodexSessionReuse:
 
         assert _get_recorded_codex_session("comfyclaw-session-a") == sid
         assert _get_recorded_codex_session("comfyclaw-session-b") == ""
+
+    def test_backend_resumes_after_thread_started_event(self) -> None:
+        from comfyclaw.agent_backends.codex_backend import CodexBackend
+
+        sid = "123e4567-e89b-12d3-a456-426614174999"
+        envelope = json.dumps(
+            {
+                "tool_calls": [
+                    {"name": "finalize_workflow", "arguments": {"rationale": "done"}}
+                ],
+                "rationale": "done",
+                "done": False,
+            }
+        )
+        stdout = "\n".join(
+            [
+                json.dumps({"type": "thread.started", "id": sid}),
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {"type": "agent_message", "text": envelope},
+                    }
+                ),
+                "",
+            ]
+        )
+        argv_calls: list[list[str]] = []
+        events: list[tuple[str, str]] = []
+
+        class _Proc:
+            def __init__(self) -> None:
+                self.stdout = StringIO(stdout)
+                self.stderr = StringIO("")
+
+            def wait(self, timeout=None):
+                return 0
+
+        def fake_popen(argv, **_kwargs):
+            argv_calls.append(list(argv))
+            return _Proc()
+
+        be = CodexBackend(model="", session_key="comfyclaw-codex-resume-test")
+        with patch("subprocess.Popen", side_effect=fake_popen):
+            for _ in range(2):
+                assert (
+                    be.run_tool_loop(
+                        system="sys",
+                        user="user",
+                        tools=[],
+                        dispatch=lambda call: ("ok", call.name == "finalize_workflow"),
+                        on_event=lambda et, content, tool, args: events.append((et, content)),
+                    )
+                    == "done"
+                )
+
+        assert "resume" not in argv_calls[0]
+        assert argv_calls[1][1:3] == ["exec", "resume"]
+        assert sid in argv_calls[1]
+        info_events = [content for et, content in events if et == "info"]
+        assert "Starting Codex session" in info_events
+        assert "Continuing Codex session" in info_events

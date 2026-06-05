@@ -129,6 +129,14 @@ def _extract_codex_session_id(line: str) -> str:
         "thread_id",
         "rollout_id",
     )
+    etype = str(evt.get("type") or "").lower()
+    if any(token in etype for token in ("thread", "session", "conversation")):
+        val = evt.get("id")
+        if isinstance(val, str):
+            sid = _valid_session_id(val)
+            if sid:
+                return sid
+
     stack = [evt]
     while stack:
         cur = stack.pop()
@@ -337,6 +345,7 @@ class CodexBackend:
             # JSON envelope and break the parser.
             return agent_text_parts[-1].strip() if agent_text_parts else ""
 
+        has_native_session = bool(_get_recorded_codex_session(self.session_key))
         return _stream_session.run_envelope_loop(
             backend_name="codex",
             invoke=_invoke,
@@ -346,4 +355,9 @@ class CodexBackend:
             dispatch=dispatch,
             on_event=on_event,
             max_rounds=max_rounds,
+            start_message=(
+                "Continuing Codex session"
+                if has_native_session
+                else "Starting Codex session"
+            ),
         )

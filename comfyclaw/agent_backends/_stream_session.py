@@ -202,6 +202,7 @@ def run_envelope_loop(
     on_event,  # EventFn | None
     max_rounds: int,
     protocol_in_system: bool = False,
+    start_message: str | None = None,
 ) -> str:
     """Drive a CLI agent that doesn't natively support tool-use.
 
@@ -216,7 +217,7 @@ def run_envelope_loop(
     rationale = "(no rationale provided)"
 
     if on_event:
-        on_event("info", f"Starting {backend_name} turn", "", None)
+        on_event("info", start_message or f"Starting {backend_name} turn", "", None)
 
     for _round_idx in range(1, max_rounds + 1):
         prompt = "\n\n".join(convo)

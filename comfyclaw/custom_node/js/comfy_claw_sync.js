@@ -1101,10 +1101,7 @@ const CLI_MODELS = {
     label: "Claude Code",
     color: "#cc785c",
     models: [
-      { value: "", label: "CLI default" },
-      { value: "sonnet", label: "Sonnet (latest)" },
-      { value: "opus", label: "Opus (latest)" },
-      { value: "haiku", label: "Haiku (latest)" },
+      { value: "", label: "default" },
       { value: "claude-opus-4-7", label: "Claude Opus 4.7" },
       { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
       { value: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
@@ -1114,7 +1111,7 @@ const CLI_MODELS = {
     label: "Codex",
     color: "#10a37f",
     models: [
-      { value: "", label: "CLI default (GPT-5.5)" },
+      { value: "", label: "default" },
       { value: "gpt-5.5", label: "GPT-5.5" },
       { value: "gpt-5.4", label: "GPT-5.4" },
       { value: "gpt-5.4-mini", label: "GPT-5.4 mini" },
@@ -1125,7 +1122,7 @@ const CLI_MODELS = {
     label: "Gemini CLI",
     color: "#4285f4",
     models: [
-      { value: "", label: "CLI default" },
+      { value: "", label: "default" },
       { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
       { value: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
       { value: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash Lite" },
@@ -1192,7 +1189,7 @@ function _setCliModelFor(backendId, value) {
 function _cliModelLabel(backendId, value) {
   const list = CLI_MODELS[backendId]?.models || [];
   const m = list.find((x) => x.value === (value || ""));
-  return m ? m.label : (value || "CLI default");
+  return m ? m.label : (value || "default");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1348,6 +1345,7 @@ function _mkSession(name = "", workflowId = "", sessions = []) {
     workflowId: _asStr(workflowId),  // identity string from _detectWorkflowIdentity().name
     prompt: "",
     chatHistory: [],
+    agentLog: [],
     setupLocked: false,
     provider: "anthropic",
     model: "",
@@ -1363,6 +1361,8 @@ _sessions.forEach((s, i) => {
   if (s.workflowId === undefined) s.workflowId = "";
   if (typeof s.name !== "string" || !s.name) s.name = `Session ${i + 1}`;
   if (typeof s.workflowId !== "string") s.workflowId = "";
+  if (!Array.isArray(s.chatHistory)) s.chatHistory = [];
+  if (!Array.isArray(s.agentLog)) s.agentLog = [];
   if (typeof s.setupLocked !== "boolean") {
     s.setupLocked = !!(_asStr(s.prompt).trim() || (Array.isArray(s.chatHistory) && s.chatHistory.length));
   }
@@ -1377,7 +1377,63 @@ if (!_sessions.find(s => s.id === _activeSessionId)) _activeSessionId = _session
 
 function _activeSession() { return _sessions.find(s => s.id === _activeSessionId) || _sessions[0]; }
 
-function _persistSessions() { localStorage.setItem(_SESSION_KEY, JSON.stringify(_sessions)); }
+function _persistSessions() {
+  try {
+    localStorage.setItem(_SESSION_KEY, JSON.stringify(_sessions));
+  } catch (err) {
+    // localStorage is small; preserve sessions and recent conversation by
+    // trimming verbose operational logs before giving up.
+    try {
+      _sessions.forEach((s) => {
+        if (Array.isArray(s.agentLog)) s.agentLog = s.agentLog.slice(-60);
+      });
+      localStorage.setItem(_SESSION_KEY, JSON.stringify(_sessions));
+    } catch (_) {
+      console.warn("[ComfyClaw] Failed to persist sessions:", err);
+    }
+  }
+}
+
+function _compactAgentLogEvent(event) {
+  if (!event || typeof event !== "object") return null;
+  const eventType = _asStr(event.event_type || "info") || "info";
+  const content = _asStr(event.content);
+  const out = {
+    event_type: eventType,
+    content: content.length > 12000 ? content.slice(0, 12000) + "\n…[truncated]" : content,
+    timestamp: Number(event.timestamp) || Date.now() / 1000,
+  };
+  if (event.message_id) out.message_id = _asStr(event.message_id);
+  if (event.tool_name) out.tool_name = _asStr(event.tool_name);
+  if (event.iteration) out.iteration = event.iteration;
+  if (event.tool_args && typeof event.tool_args === "object") {
+    const args = {};
+    for (const [k, v] of Object.entries(event.tool_args)) {
+      let text = "";
+      try {
+        text = typeof v === "string" ? v : JSON.stringify(v);
+      } catch (_) {
+        text = String(v);
+      }
+      text = _asStr(text);
+      args[k] = text.length > 300 ? text.slice(0, 300) + "…" : text;
+    }
+    out.tool_args = args;
+  }
+  return out;
+}
+
+function _persistAgentLogEvent(event) {
+  const sess = _activeSession();
+  const compact = _compactAgentLogEvent(event);
+  if (!sess || !compact) return;
+  if (!Array.isArray(sess.agentLog)) sess.agentLog = [];
+  sess.agentLog.push(compact);
+  if (sess.agentLog.length > MAX_LOG_ENTRIES) {
+    sess.agentLog = sess.agentLog.slice(-MAX_LOG_ENTRIES);
+  }
+  _persistSessions();
+}
 
 function _lockActiveSessionSetup() {
   const sess = _activeSession();
@@ -1433,6 +1489,7 @@ function _captureCurrentSession() {
   const provEl = document.getElementById("comfyclaw-provider-state");
   if (promptEl) sess.prompt = promptEl.value;
   sess.chatHistory = [..._chatHistory];
+  sess.agentLog = _thinkingEntries.map(_compactAgentLogEvent).filter(Boolean).slice(-MAX_LOG_ENTRIES);
   if (modelEl) sess.model = modelEl.value;
   if (provEl) sess.provider = provEl.dataset.provider || "anthropic";
   // Always keep the workflow identity fresh
@@ -1471,12 +1528,16 @@ function _applySession(sessionId) {
   const modelEl = document.getElementById("comfyclaw-gen-model");
   if (modelEl && sess.model) modelEl.value = sess.model;
   // Rebuild chat log
-  clearAgentLog();
-  for (const msg of _chatHistory) {
-    appendAgentLog({
+  clearAgentLog({ persist: false });
+  const log = Array.isArray(sess.agentLog) && sess.agentLog.length
+    ? sess.agentLog
+    : _chatHistory.map((msg) => ({
       event_type: msg.role === "user" ? "user" : "assistant_done",
-      content: msg.content, timestamp: Date.now() / 1000
-    });
+      content: msg.content,
+      timestamp: Date.now() / 1000,
+    }));
+  for (const event of log) {
+    appendAgentLog(event, { persist: false });
   }
   _requestCheckpointsForActiveSession();
   _syncSessionSetupUI();
@@ -1501,9 +1562,10 @@ function _newSession(nameHint = "") {
   _activeSessionId = sess.id;
   localStorage.setItem(_ACTIVE_SESSION_KEY, sess.id);
   _chatHistory = [];
+  sess.agentLog = [];
   const promptEl = document.getElementById("comfyclaw-gen-prompt");
   if (promptEl) promptEl.value = "";
-  clearAgentLog();
+  clearAgentLog({ persist: false });
   _setActiveProvider("anthropic", false);
   _renderSessionTabs();
   _requestCheckpointsForActiveSession();
@@ -3752,7 +3814,9 @@ function createComfyClawPanel() {
   panel.querySelector("#comfyclaw-clear-log").addEventListener("click", () => {
     _chatHistory = [];
     const sess = _activeSession();
-    sess.chatHistory = []; _persistSessions();
+    sess.chatHistory = [];
+    sess.agentLog = [];
+    _persistSessions();
     clearAgentLog();
     showToast("Log cleared", "info", 1500);
   });
@@ -3816,6 +3880,7 @@ function createComfyClawPanel() {
     if (pEl) pEl.value = initSess.prompt;
   }
   _chatHistory = [...(initSess.chatHistory || [])];
+  requestAnimationFrame(() => _applySession(_activeSessionId));
 
   // ── Strategy toggle (✨ From Scratch / 🔧 Improve) ───────────────────────────
   let selectedMode = "scratch";
@@ -6025,17 +6090,25 @@ function setGenStatus(state, text) {
   if (state === "error") showToast(text.slice(0, 80), "error", 4000);
 }
 
-function appendAgentLog(event) {
+function appendAgentLog(event, opts = {}) {
   if (!_thinkingPanel) return;
   const logEl = _thinkingPanel.querySelector("#comfyclaw-think-log");
   if (!logEl) return;
 
-  _thinkingEntries.push(event);
+  const shouldPersist = opts.persist !== false;
+  const storedEvent = _compactAgentLogEvent(event) || {
+    event_type: "info",
+    content: "",
+    timestamp: Date.now() / 1000,
+  };
+  _thinkingEntries.push(storedEvent);
+  if (shouldPersist) _persistAgentLogEvent(storedEvent);
   if (_thinkingEntries.length > MAX_LOG_ENTRIES) {
     _thinkingEntries.shift();
     if (logEl.firstChild) logEl.removeChild(logEl.firstChild);
   }
 
+  event = storedEvent;
   const style = EVENT_STYLES[event.event_type] || EVENT_STYLES.info;
   const entry = document.createElement("div");
   Object.assign(entry.style, {
@@ -6059,6 +6132,11 @@ function appendAgentLog(event) {
   // Remove empty-state placeholder on first real entry
   const emptyEl = logEl.querySelector("#comfyclaw-log-empty");
   if (emptyEl) emptyEl.remove();
+
+  const isUserMessage = event.event_type === "user";
+  const isAssistantMessage = event.event_type === "assistant_done";
+  const isPrimaryMessage = isUserMessage || isAssistantMessage;
+  const isOperationalEvent = ["tool_call", "tool_result", "strategy", "thinking", "validation", "info"].includes(event.event_type);
 
   // Entries that benefit from Markdown rendering
   const MD_TYPES = new Set(["strategy", "thinking", "assistant_stream", "assistant_done", "info"]);
@@ -6088,20 +6166,125 @@ function appendAgentLog(event) {
   if (event.event_type === "assistant_stream" && event.message_id) {
     entry.id = `think-stream-${event.message_id}`;
     entry.classList.add("cc-log-entry");
+    Object.assign(entry.style, {
+      margin: "8px 0 10px",
+      padding: "0",
+      background: "transparent",
+      borderLeft: "none",
+      display: "flex",
+      justifyContent: "flex-start",
+    });
     entry.innerHTML = `
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px;">
-        <span style="display:inline-flex;align-items:center;gap:7px;">
-          <span style="font-size:16px;line-height:1;">${style.icon}</span>
-          <span style="color:${style.color}; font-weight:600; font-size:12.5px;">${style.label}</span>
-          <span class="cc-spin cc-spin-ring" title="Thinking…"
-                style="margin-left:4px;"></span>
-        </span>
-        <span style="color:var(--cc-fg-dim); font-size:11px;">${time}</span>
+      <div style="max-width:92%; min-width:0;">
+        <div style="display:flex;align-items:center;gap:7px;margin:0 0 4px 2px;color:var(--cc-fg-muted);font-size:11px;">
+          <span style="font-weight:700;color:var(--cc-accent-green);">${style.label}</span>
+          <span class="cc-spin cc-spin-ring" title="Thinking…"></span>
+          <span style="color:var(--cc-fg-dim);">${time}</span>
+        </div>
+        <div id="think-stream-body-${event.message_id}"
+             style="white-space:pre-wrap;min-height:20px;padding:9px 11px;
+                    background:var(--cc-surface);border:1px solid color-mix(in srgb, var(--cc-accent-green) 30%, var(--cc-border));
+                    border-radius:10px 10px 10px 3px;box-shadow:var(--cc-shadow-sm);
+                    font-size:13px;line-height:1.5;color:var(--cc-fg);">…</div>
       </div>
-      <div id="think-stream-body-${event.message_id}" style="white-space:pre-wrap;min-height:16px;">…</div>
     `;
     logEl.appendChild(entry);
     logEl.scrollTop = logEl.scrollHeight;
+    return;
+  }
+
+  if (isPrimaryMessage) {
+    Object.assign(entry.style, {
+      margin: "8px 0 10px",
+      padding: "0",
+      background: "transparent",
+      borderLeft: "none",
+      display: "flex",
+      justifyContent: isUserMessage ? "flex-end" : "flex-start",
+      fontSize: "13px",
+    });
+    const bubbleBg = isUserMessage ? "var(--cc-accent)" : "var(--cc-surface)";
+    const bubbleFg = isUserMessage ? "#111827" : "var(--cc-fg)";
+    const bubbleBorder = isUserMessage
+      ? "1px solid color-mix(in srgb, var(--cc-accent) 60%, white)"
+      : "1px solid color-mix(in srgb, var(--cc-accent-green) 30%, var(--cc-border))";
+    const radius = isUserMessage ? "10px 10px 3px 10px" : "10px 10px 10px 3px";
+    entry.innerHTML = `
+      <div style="max-width:92%;min-width:0;">
+        <div style="display:flex;align-items:center;gap:7px;margin:0 2px 4px;
+                    justify-content:${isUserMessage ? "flex-end" : "flex-start"};
+                    color:var(--cc-fg-muted);font-size:11px;">
+          <span style="font-weight:700;color:${isUserMessage ? "var(--cc-accent)" : "var(--cc-accent-green)"};">${style.label}</span>
+          <span style="color:var(--cc-fg-dim);">${time}</span>
+        </div>
+        <div class="cc-msg-body"
+             style="padding:9px 11px;background:${bubbleBg};color:${bubbleFg};
+                    border:${bubbleBorder};border-radius:${radius};
+                    box-shadow:var(--cc-shadow-sm);font-size:13px;line-height:1.5;">
+          ${body}
+        </div>
+      </div>
+    `;
+    entry.classList.add("cc-log-entry", "cc-log-message");
+    logEl.appendChild(entry);
+    if (logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 120) {
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    const countEl = document.getElementById("comfyclaw-think-count");
+    if (countEl) {
+      countEl.textContent = _thinkingEntries.length;
+      countEl.style.display = _thinkingEntries.length ? "" : "none";
+    }
+    return;
+  }
+
+  if (isOperationalEvent) {
+    Object.assign(entry.style, {
+      margin: "3px 0",
+      padding: "4px 7px",
+      background: "transparent",
+      borderLeft: "none",
+      borderTop: "1px solid color-mix(in srgb, var(--cc-border) 55%, transparent)",
+      opacity: event.event_type === "tool_result" ? "0.62" : "0.78",
+      fontSize: "11px",
+      lineHeight: "1.35",
+    });
+    const opTitle = event.event_type === "tool_call" && event.tool_name
+      ? `${style.label}: ${event.tool_name}`
+      : style.label;
+    if (event.event_type === "tool_result") {
+      entry.innerHTML = `
+        <details>
+          <summary style="cursor:pointer;color:var(--cc-fg-muted);display:flex;gap:7px;align-items:center;">
+            <span style="width:6px;height:6px;border-radius:50%;background:${style.color};display:inline-block;"></span>
+            <span>${escapeHtml(opTitle)}</span>
+            <span style="margin-left:auto;color:var(--cc-fg-dim);">${time}</span>
+          </summary>
+          <div class="cc-msg-body" style="margin:5px 0 2px 13px;color:var(--cc-fg-muted);white-space:pre-wrap;">${body}</div>
+        </details>
+      `;
+    } else {
+      entry.innerHTML = `
+        <div style="display:flex;gap:7px;align-items:flex-start;color:var(--cc-fg-muted);">
+          <span style="width:6px;height:6px;border-radius:50%;background:${style.color};display:inline-block;margin-top:6px;flex-shrink:0;"></span>
+          <div class="cc-msg-body" style="flex:1;min-width:0;">
+            <span style="font-weight:700;color:var(--cc-fg-muted);">${escapeHtml(opTitle)}</span>
+            ${iterBadge}
+            <div style="margin-top:1px;color:var(--cc-fg-dim);">${body}</div>
+          </div>
+          <span style="color:var(--cc-fg-dim);font-size:10.5px;flex-shrink:0;">${time}</span>
+        </div>
+      `;
+    }
+    entry.classList.add("cc-log-entry", "cc-log-event");
+    logEl.appendChild(entry);
+    const wasAtBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 60;
+    if (wasAtBottom) logEl.scrollTop = logEl.scrollHeight;
+    const countEl = document.getElementById("comfyclaw-think-count");
+    if (countEl) {
+      countEl.textContent = _thinkingEntries.length;
+      countEl.style.display = _thinkingEntries.length ? "" : "none";
+    }
     return;
   }
 
@@ -6162,8 +6345,15 @@ function appendAgentLog(event) {
   }
 }
 
-function clearAgentLog() {
+function clearAgentLog(opts = {}) {
   _thinkingEntries = [];
+  if (opts.persist !== false) {
+    const sess = _activeSession();
+    if (sess) {
+      sess.agentLog = [];
+      _persistSessions();
+    }
+  }
   const logEl = document.getElementById("comfyclaw-think-log");
   if (logEl) {
     logEl.innerHTML = `
@@ -6701,6 +6891,18 @@ function createChatPanel() {
 
     input.value = "";
     _chatHistory.push({ role: "user", content: text });
+    const sess = _activeSession();
+    if (sess) {
+      sess.chatHistory = [..._chatHistory];
+      if (!Array.isArray(sess.agentLog)) sess.agentLog = [];
+      sess.agentLog.push(_compactAgentLogEvent({
+        event_type: "user",
+        content: text,
+        timestamp: Date.now() / 1000,
+      }));
+      sess.agentLog = sess.agentLog.filter(Boolean).slice(-MAX_LOG_ENTRIES);
+      _persistSessions();
+    }
 
     _appendChatBubble("user", text);
 
@@ -6863,7 +7065,17 @@ function _appendChatToken(msgId, token, done) {
       if (bubble) bubble.innerHTML = renderMarkdown(rawText);
       // Persist to session
       const sess = _activeSession();
-      if (sess) { sess.chatHistory = [..._chatHistory]; _persistSessions(); }
+      if (sess) {
+        sess.chatHistory = [..._chatHistory];
+        if (!Array.isArray(sess.agentLog)) sess.agentLog = [];
+        sess.agentLog.push(_compactAgentLogEvent({
+          event_type: "assistant_done",
+          content: rawText,
+          timestamp: Date.now() / 1000,
+        }));
+        sess.agentLog = sess.agentLog.filter(Boolean).slice(-MAX_LOG_ENTRIES);
+        _persistSessions();
+      }
     }
   }
 }
