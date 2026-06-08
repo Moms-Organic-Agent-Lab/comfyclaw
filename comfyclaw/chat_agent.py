@@ -67,6 +67,118 @@ def _summarize_workflow(workflow: dict | None) -> str:
     return "\n\nCurrent workflow nodes:\n" + "\n".join(lines)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Skill library access for chat (hybrid: always-on catalogue + /skill trigger)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Chat is a single-shot completion (no tool loop), so instead of a ``read_skill``
+# tool we inject the skill catalogue plus the full bodies of the most relevant /
+# explicitly requested skills straight into the system prompt.
+_CHAT_SKILL_MAX_BODIES = 3
+_CHAT_SKILL_MAX_CHARS = 9000
+_SKILL_CMD_RE = re.compile(r"/skills?\s+([a-zA-Z0-9 ,_\-]+)", re.IGNORECASE)
+
+_chat_skill_registry = None  # lazy module-level fallback registry
+
+
+def _default_chat_registry():
+    """Build (once) a fallback SkillsRegistry when the caller passes none."""
+    global _chat_skill_registry
+    if _chat_skill_registry is None:
+        try:
+            from .skill_manager import SkillsRegistry
+
+            _chat_skill_registry = SkillsRegistry(quiet=True)
+        except Exception:
+            _chat_skill_registry = False  # sentinel: tried and failed
+    return _chat_skill_registry or None
+
+
+def _latest_user_text(messages: list[dict] | None) -> str:
+    for m in reversed(messages or []):
+        if m.get("role") == "user":
+            return str(m.get("content") or "")
+    return ""
+
+
+def _parse_skill_commands(text: str, valid_names: set[str]) -> list[str]:
+    """Extract skills the user force-loaded via ``/skill <name>`` (or ``/skills``).
+
+    Everything after the command is tokenised; only tokens that exactly match a
+    known skill name are kept, so the user's normal prose is ignored.
+    """
+    out: list[str] = []
+    for m in _SKILL_CMD_RE.finditer(text or ""):
+        for tok in re.split(r"[\s,]+", m.group(1).strip()):
+            name = tok.strip().lower()
+            if name in valid_names and name not in out:
+                out.append(name)
+    return out
+
+
+def _build_skill_block(registry, messages: list[dict] | None) -> str:
+    """Return the skill section to append to the chat system prompt.
+
+    Always lists the enabled skill catalogue; additionally inlines the full
+    instructions for skills the user explicitly requested via ``/skill`` and the
+    ones that look relevant to the latest message (bounded in count and size).
+    """
+    if registry is None:
+        return ""
+    try:
+        catalogue = registry.build_available_skills_xml()
+        valid = set(registry.enabled_skill_names)
+    except Exception:
+        return ""
+    if not valid:
+        return ""
+
+    latest = _latest_user_text(messages)
+    explicit = _parse_skill_commands(latest, valid)
+    try:
+        relevant = registry.detect_relevant_skills(latest)
+    except Exception:
+        relevant = []
+
+    load_order: list[str] = []
+    for name in [*explicit, *relevant]:
+        if name in valid and name not in load_order:
+            load_order.append(name)
+
+    bodies: list[tuple[str, str]] = []
+    used = 0
+    for name in load_order[:_CHAT_SKILL_MAX_BODIES]:
+        try:
+            body = (registry.get_body(name) or "").strip()
+        except Exception:
+            continue
+        if not body:
+            continue
+        if bodies and used + len(body) > _CHAT_SKILL_MAX_CHARS:
+            break
+        bodies.append((name, body))
+        used += len(body)
+
+    parts = [
+        "\n\n## ComfyClaw skill library\n"
+        "You have a library of reusable skills (specialised instruction sets). The "
+        "catalogue below lists each enabled skill's name and description. When a skill is "
+        "relevant to the user's request, follow its guidance and tell the user which skill "
+        "you applied. The user can force-load a skill by typing `/skill <name>` — treat that "
+        "as a request to use that skill and do not echo the command syntax back.\n",
+        catalogue,
+    ]
+    if bodies:
+        parts.append(
+            "\n\n## Loaded skill instructions\n"
+            "Full instructions for the skills most relevant to this turn "
+            "(apply these directly):\n"
+        )
+        for name, body in bodies:
+            parts.append(f'\n<skill name="{name}">\n{body}\n</skill>\n')
+    return "".join(parts)
+
+
 def _flatten_history(messages: list[dict]) -> tuple[str, str]:
     """Split chat history into (prior_transcript, latest_user_message).
 
@@ -112,6 +224,7 @@ async def chat_stream(
     agent_backend: str = "litellm",
     images: list[dict] | None = None,
     session_id: str = "",
+    skills_registry: object = None,
 ) -> AsyncGenerator[str, None]:
     """Stream chat tokens from the selected backend.
 
@@ -130,12 +243,23 @@ async def chat_stream(
         log warning.
     """
     backend = (agent_backend or "litellm").strip().lower().replace("_", "-")
+    # Resolve the skill library once and inject it into every backend's system
+    # prompt (hybrid: always-on catalogue + /skill force-load + auto-relevance).
+    # Callers can pass ``skills_registry=False`` to opt out (e.g. internal tasks
+    # like skill refinement that shouldn't see the catalogue).
+    if skills_registry is False:
+        registry = None
+    elif skills_registry is not None:
+        registry = skills_registry
+    else:
+        registry = _default_chat_registry()
+    skill_block = _build_skill_block(registry, messages)
     if backend in ("claude-code", "claude"):
         if images:
             yield "⚠️  Image attachments are currently supported in API mode (LiteLLM) only. "
             yield "Switch Access to API to run vision chat."
             return
-        async for tok in _claude_chat_stream(messages, workflow, model):
+        async for tok in _claude_chat_stream(messages, workflow, model, skill_block=skill_block):
             yield tok
         return
     if backend in ("codex", "openai-codex"):
@@ -143,7 +267,9 @@ async def chat_stream(
             yield "⚠️  Image attachments are currently supported in API mode (LiteLLM) only. "
             yield "Switch Access to API to run vision chat."
             return
-        async for tok in _codex_chat_stream(messages, workflow, model, session_id=session_id):
+        async for tok in _codex_chat_stream(
+            messages, workflow, model, session_id=session_id, skill_block=skill_block
+        ):
             yield tok
         return
     if backend in ("gemini-cli", "gemini"):
@@ -151,7 +277,7 @@ async def chat_stream(
             yield "⚠️  Image attachments are currently supported in API mode (LiteLLM) only. "
             yield "Switch Access to API to run vision chat."
             return
-        async for tok in _gemini_chat_stream(messages, workflow, model):
+        async for tok in _gemini_chat_stream(messages, workflow, model, skill_block=skill_block):
             yield tok
         return
     if backend != "litellm":
@@ -159,7 +285,9 @@ async def chat_stream(
             "[chat] Unknown agent_backend %r — falling back to LiteLLM.",
             agent_backend,
         )
-    async for tok in _litellm_chat_stream(messages, workflow, model, api_key, api_base, images):
+    async for tok in _litellm_chat_stream(
+        messages, workflow, model, api_key, api_base, images, skill_block=skill_block
+    ):
         yield tok
 
 
@@ -175,10 +303,11 @@ async def _litellm_chat_stream(
     api_key: str | None,
     api_base: str | None,
     images: list[dict] | None,
+    skill_block: str = "",
 ) -> AsyncGenerator[str, None]:
     import litellm  # lazy import — not always needed
 
-    system = _SYSTEM_BASE + _summarize_workflow(workflow)
+    system = _SYSTEM_BASE + skill_block + _summarize_workflow(workflow)
     full_messages = [{"role": "system", "content": system}] + list(messages)
 
     # If images are attached, lift the last user turn into multimodal content.
@@ -346,6 +475,7 @@ async def _claude_chat_stream(
     messages: list[dict],
     workflow: dict | None,
     model: str,
+    skill_block: str = "",
 ) -> AsyncGenerator[str, None]:
     """Drive ``claude -p`` for a single chat reply.
 
@@ -365,7 +495,7 @@ async def _claude_chat_stream(
         )
         return
 
-    system_prompt = _SYSTEM_BASE + _summarize_workflow(workflow)
+    system_prompt = _SYSTEM_BASE + skill_block + _summarize_workflow(workflow)
     transcript, latest_user = _flatten_history(messages)
     if not latest_user:
         return
@@ -603,6 +733,7 @@ async def _codex_chat_stream(
     workflow: dict | None,
     model: str,
     session_id: str = "",
+    skill_block: str = "",
 ) -> AsyncGenerator[str, None]:
     """Drive ``codex exec --json`` for a single chat reply.
 
@@ -633,7 +764,7 @@ async def _codex_chat_stream(
         )
         return
 
-    system_prompt = _SYSTEM_BASE + _summarize_workflow(workflow)
+    system_prompt = _SYSTEM_BASE + skill_block + _summarize_workflow(workflow)
     transcript, latest_user = _flatten_history(messages)
     if not latest_user:
         return
@@ -855,6 +986,7 @@ async def _gemini_chat_stream(
     messages: list[dict],
     workflow: dict | None,
     model: str,
+    skill_block: str = "",
 ) -> AsyncGenerator[str, None]:
     """Drive ``gemini -p "<prompt>"`` for a single chat reply.
 
@@ -875,7 +1007,7 @@ async def _gemini_chat_stream(
         )
         return
 
-    system_prompt = _SYSTEM_BASE + _summarize_workflow(workflow)
+    system_prompt = _SYSTEM_BASE + skill_block + _summarize_workflow(workflow)
     transcript, latest_user = _flatten_history(messages)
     if not latest_user:
         return

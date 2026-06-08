@@ -38,11 +38,35 @@ import shutil
 import subprocess
 import sys
 import threading
+import uuid
 
 from . import _stream_session
 from .base import DispatchFn, EventFn, ToolCall
 
 _CLAUDE_BIN_ENV = "COMFYCLAW_CLAUDE_BIN"
+
+# Native-session continuity: maps a stable per-tab key (the panel's
+# ``session_id``) to the Claude Code session UUID we created for it.  The
+# Claude CLI persists each session's full transcript to disk and replays it on
+# ``--resume``, so this is how chat context survives across separate messages
+# even though every turn spawns a fresh ``claude -p`` process.  Module-level so
+# it outlives the per-message ``ClawAgent`` / backend instances.
+_CLAUDE_SESSION_BY_KEY: dict[str, str] = {}
+_CLAUDE_SESSION_LOCK = threading.Lock()
+
+
+def _get_recorded_claude_session(session_key: str) -> str:
+    if not session_key:
+        return ""
+    with _CLAUDE_SESSION_LOCK:
+        return _CLAUDE_SESSION_BY_KEY.get(session_key, "")
+
+
+def _record_claude_session(session_key: str, claude_session_id: str) -> None:
+    if not session_key or not claude_session_id:
+        return
+    with _CLAUDE_SESSION_LOCK:
+        _CLAUDE_SESSION_BY_KEY[session_key] = claude_session_id
 
 
 def _claude_bin() -> str:
@@ -100,8 +124,9 @@ class ClaudeCodeBackend:
 
     name = "claude-code"
 
-    def __init__(self, model: str = "") -> None:
+    def __init__(self, model: str = "", session_key: str = "") -> None:
         self.model = model
+        self.session_key = session_key
         self._cli_model = _normalise_claude_model(model)
         self._bin = _claude_bin()
 
@@ -121,9 +146,14 @@ class ClaudeCodeBackend:
     ) -> str:
         if on_event:
             tag = self._cli_model or "(CLI default)"
+            verb = (
+                "Continuing"
+                if _get_recorded_claude_session(self.session_key)
+                else "Starting"
+            )
             on_event(
                 "info",
-                f"Starting Claude Code session ({self._bin}) model={tag}",
+                f"{verb} Claude Code session ({self._bin}) model={tag}",
                 "",
                 None,
             )
@@ -140,8 +170,10 @@ class ClaudeCodeBackend:
         # custom tool schemas — it only exposes its built-in ecosystem
         # (Bash/Edit/Read/etc.).  We therefore drive `claude` as a strict
         # JSON-envelope LLM via `_run_envelope`, which uses
-        # `--bare --tools "" --system-prompt …` to bypass anti-injection
-        # heuristics and force the model to speak our protocol exclusively.
+        # `--tools "" --system-prompt …` to disable the built-in tools and
+        # force the model to speak our protocol exclusively. (We avoid
+        # `--bare` because it breaks claude.ai subscription auth — see
+        # `_run_envelope` docstring.)
         return _run_envelope(
             bin_path=self._bin,
             model=self._cli_model,
@@ -151,6 +183,7 @@ class ClaudeCodeBackend:
             dispatch=dispatch,
             on_event=on_event,
             max_rounds=max_rounds,
+            session_key=self.session_key,
         )
 
 
@@ -369,6 +402,7 @@ def _run_envelope(
     dispatch: DispatchFn,
     on_event: EventFn | None,
     max_rounds: int,
+    session_key: str = "",
 ) -> str:
     """Drive `claude` as a generic JSON-envelope LLM.
 
@@ -376,37 +410,73 @@ def _run_envelope(
 
     * Claude Code has its own built-in tool ecosystem (Bash/Edit/Read/etc.)
       and silently ignores arbitrary user-provided tool schemas.
-    * Without ``--bare``/``--tools ""`` and an explicit ``--system-prompt``,
-      Claude Code's anti-injection guard rejects pure JSON-envelope prompts.
-    * ``--bare`` skips hooks/LSP/plugin discovery (huge speedup) and
-      ``--tools ""`` disables every built-in tool so the model can only
-      respond via the envelope we control.
+    * ``--tools ""`` disables every built-in tool so the model can only
+      respond via the envelope we control, and ``--system-prompt`` carries
+      our envelope protocol instructions.
+
+    Native session continuity
+    --------------------------
+    When ``session_key`` is set we give the conversation a stable Claude
+    session: the first turn passes ``--session-id <uuid>`` (the CLI persists
+    that session's transcript to disk), and every later turn — including
+    *later chat messages* — passes ``--resume <uuid>`` so Claude replays the
+    prior context.  This is how chat memory survives across messages even
+    though each turn is still a fresh, stateless ``claude -p`` process. With
+    no ``session_key`` the backend stays fully stateless (one-shot per turn).
+
+    Note on ``--bare``: we deliberately do NOT pass ``--bare`` here. Although
+    it skips hooks/LSP/plugin discovery (a speedup), in current Claude Code
+    builds (verified on 2.1.x) ``--bare`` short-circuits the claude.ai
+    subscription credential load, so every turn fails with
+    ``Not logged in · Please run /login`` even when ``claude auth status``
+    reports the user as signed in. ``--tools ""`` alone is enough to force
+    envelope-only behaviour, so the speedup is not worth breaking
+    subscription auth.
     """
 
     full_system = system + _stream_session.envelope_protocol_instructions(tools)
 
-    def _invoke(prompt: str) -> str:
+    def _call_claude(session_args: list[str], prompt: str) -> tuple[int, str, str]:
         from .base import _env_with_claude_path
 
-        argv = [
-            bin_path,
-            "-p",
-            "--bare",
-            "--tools",
-            "",
-            "--system-prompt",
-            full_system,
-        ]
+        argv = [bin_path, "-p", "--tools", "", "--system-prompt", full_system]
+        argv += session_args
         if model:
             argv += ["--model", model]
-        rc, out, err = _stream_session.run_cli_oneshot(
+        return _stream_session.run_cli_oneshot(
             argv,
             prompt,
             timeout=300,
             env=_env_with_claude_path(bin_path),
         )
+
+    def _invoke(prompt: str) -> str:
+        # Decide session flags. ``--session-id`` may only be used to *create*
+        # a session (the CLI rejects reusing an existing id with
+        # "Session ID … is already in use"), so the first turn creates and
+        # every subsequent turn resumes.
+        recorded = _get_recorded_claude_session(session_key)
+        if recorded:
+            rc, out, err = _call_claude(["--resume", recorded], prompt)
+            if out or rc == 0:
+                return out or err
+            # The recorded session could not be resumed (e.g. the CLI pruned
+            # it from disk). Drop it and fall through to start a fresh one so
+            # the conversation degrades to "no memory" instead of hard-failing.
+            with _CLAUDE_SESSION_LOCK:
+                if _CLAUDE_SESSION_BY_KEY.get(session_key) == recorded:
+                    _CLAUDE_SESSION_BY_KEY.pop(session_key, None)
+
+        fresh_session_id = str(uuid.uuid4()) if session_key else ""
+        session_args = ["--session-id", fresh_session_id] if fresh_session_id else []
+        rc, out, err = _call_claude(session_args, prompt)
         if rc != 0 and not out:
             raise RuntimeError(f"claude rc={rc}: {err[:200]}")
+        # Only record the new session id after the creating call produced
+        # output, so a failed first turn doesn't leave a dangling id that a
+        # later ``--resume`` could not find on disk.
+        if fresh_session_id and out:
+            _record_claude_session(session_key, fresh_session_id)
         return out or err
 
     # We've already baked the system prompt into --system-prompt, so pass an
@@ -422,4 +492,7 @@ def _run_envelope(
         on_event=on_event,
         max_rounds=max_rounds,
         protocol_in_system=True,
+        # With a session_key the CLI carries history via --resume, so only the
+        # newest turn needs to be sent each round (and across messages).
+        incremental_session=bool(session_key),
     )

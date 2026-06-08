@@ -15,7 +15,8 @@
  *   { "type": "workflow_diff", "ops": [ {op, id, data?}, … ], "full": {…} }
  *
  *   Feedback request (human-in-the-loop):
- *   { "type": "request_feedback", "image_path": "...", "vlm_summary": "...|null",
+ *   { "type": "request_feedback", "image_path": "...", "image_b64": "data:...|''",
+ *     "vlm_summary": "...|null", "verifier": {score, passed[], failed[], …}|null,
  *     "iteration": N, "prompt": "..." }
  *
  *   Agent thinking event:
@@ -540,26 +541,39 @@ function createFeedbackPanel() {
   Object.assign(panel.style, {
     background: "#1e1e2e",
     color: "#cdd6f4",
-    borderRadius: "12px",
-    padding: "24px",
-    width: "520px",
-    maxHeight: "80vh",
+    borderRadius: "14px",
+    padding: "22px 24px",
+    width: "560px",
+    maxHeight: "88vh",
     overflowY: "auto",
     boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
     fontFamily: "system-ui, -apple-system, sans-serif",
     fontSize: "14px",
     lineHeight: "1.5",
+    border: "1px solid #313244",
   });
 
   panel.innerHTML = `
-    <h2 style="margin:0 0 8px 0; font-size:18px; color:#cba6f7;">
-      📝 ComfyClaw — Your Feedback
+    <h2 style="margin:0 0 6px 0; font-size:18px; color:#cba6f7; display:flex; align-items:center; gap:8px;">
+      <span>📝</span><span>ComfyClaw — Your Feedback</span>
     </h2>
-    <div id="comfyclaw-fb-meta" style="margin-bottom:12px; color:#a6adc8; font-size:13px;"></div>
+    <div id="comfyclaw-fb-meta" style="margin-bottom:14px; color:#a6adc8; font-size:13px;"></div>
+    <div id="comfyclaw-fb-image-wrap" style="display:none; margin-bottom:14px;">
+      <a id="comfyclaw-fb-image-link" href="#" target="_blank" rel="noopener"
+         style="display:block; text-decoration:none;">
+        <img id="comfyclaw-fb-image" alt="Generated result"
+             style="display:block; width:100%; max-height:340px; object-fit:contain;
+                    border-radius:10px; border:1px solid #45475a; background:#11111b;" />
+      </a>
+      <div style="text-align:center; color:#6c7086; font-size:11px; margin-top:5px;">
+        Generated result — click to open full size
+      </div>
+    </div>
+    <div id="comfyclaw-fb-verifier" style="margin-bottom:14px; display:none;"></div>
     <div id="comfyclaw-fb-vlm" style="margin-bottom:12px; display:none;
          background:#313244; border-radius:8px; padding:12px; font-size:13px;
          white-space:pre-wrap; max-height:200px; overflow-y:auto;"></div>
-    <label style="display:block; margin-bottom:4px; font-weight:600; color:#a6adc8;">
+    <label style="display:block; margin-bottom:6px; font-weight:600; color:#a6adc8;">
       How did this generation turn out?
     </label>
     <div id="comfyclaw-fb-scores" style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px;">
@@ -679,6 +693,148 @@ function createFeedbackPanel() {
   return overlay;
 }
 
+function _fbScoreColor(score) {
+  if (score >= 0.75) return "#a6e3a1";
+  if (score >= 0.5) return "#f9e2af";
+  return "#f38ba8";
+}
+
+function _fbRenderChecks(items, color, icon) {
+  return items
+    .map(
+      (it) => `
+      <div style="display:flex; gap:8px; align-items:flex-start; padding:6px 9px;
+           background:${color}14; border:1px solid ${color}33; border-radius:8px;">
+        <span style="color:${color}; flex-shrink:0; font-weight:700; line-height:1.4;">${icon}</span>
+        <span style="color:#cdd6f4; font-size:12.5px; line-height:1.4;">${escHtml(it)}</span>
+      </div>`
+    )
+    .join("");
+}
+
+// Render the structured verifier report (score / passed / failed / region
+// issues / suggestions) into *container*.  Returns true if anything rendered.
+function renderVerifierFeedback(container, verifier) {
+  if (!verifier || typeof verifier !== "object") {
+    container.style.display = "none";
+    container.innerHTML = "";
+    return false;
+  }
+  const score = typeof verifier.score === "number" ? verifier.score : null;
+  const passed = Array.isArray(verifier.passed) ? verifier.passed : [];
+  const failed = Array.isArray(verifier.failed) ? verifier.failed : [];
+  const assessment = verifier.overall_assessment || "";
+  const regions = Array.isArray(verifier.region_issues) ? verifier.region_issues : [];
+  const suggestions = Array.isArray(verifier.evolution_suggestions)
+    ? verifier.evolution_suggestions
+    : [];
+
+  const parts = [];
+
+  if (score !== null) {
+    const pct = Math.round(Math.max(0, Math.min(1, score)) * 100);
+    const col = _fbScoreColor(score);
+    parts.push(`
+      <div style="background:#313244; border:1px solid #45475a; border-radius:10px; padding:12px 14px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <span style="font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:0.04em; color:#a6adc8;">
+            🤖 VLM Assessment
+          </span>
+          <span style="font-size:16px; font-weight:800; color:${col};">${score.toFixed(2)}</span>
+        </div>
+        <div style="height:7px; border-radius:99px; background:#45475a; overflow:hidden;">
+          <div style="height:100%; width:${pct}%; background:${col}; border-radius:99px;"></div>
+        </div>
+        ${assessment
+        ? `<div style="margin-top:9px; font-size:12.5px; color:#bac2de; line-height:1.45;">${escHtml(assessment)}</div>`
+        : ""}
+      </div>`);
+  } else if (assessment) {
+    parts.push(`
+      <div style="background:#313244; border:1px solid #45475a; border-radius:10px; padding:12px 14px; font-size:12.5px; color:#bac2de; line-height:1.45;">
+        ${escHtml(assessment)}
+      </div>`);
+  }
+
+  if (passed.length) {
+    parts.push(`
+      <div>
+        <div style="display:flex; align-items:center; gap:7px; margin:0 0 6px 2px;">
+          <span style="font-size:12px; font-weight:700; color:#a6e3a1;">Passed</span>
+          <span style="font-size:10px; font-weight:800; color:#1e1e2e; background:#a6e3a1; border-radius:99px; padding:1px 7px;">${passed.length}</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:5px;">${_fbRenderChecks(passed, "#a6e3a1", "✓")}</div>
+      </div>`);
+  }
+
+  if (failed.length) {
+    parts.push(`
+      <div>
+        <div style="display:flex; align-items:center; gap:7px; margin:0 0 6px 2px;">
+          <span style="font-size:12px; font-weight:700; color:#f38ba8;">Failed</span>
+          <span style="font-size:10px; font-weight:800; color:#1e1e2e; background:#f38ba8; border-radius:99px; padding:1px 7px;">${failed.length}</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:5px;">${_fbRenderChecks(failed, "#f38ba8", "✗")}</div>
+      </div>`);
+  }
+
+  if (regions.length) {
+    const sevColor = { high: "#f38ba8", medium: "#f9e2af", low: "#89b4fa" };
+    const rows = regions
+      .map((ri) => {
+        const sev = String(ri.severity || "low").toLowerCase();
+        const col = sevColor[sev] || "#89b4fa";
+        const fixes = Array.isArray(ri.fix_strategies) ? ri.fix_strategies : [];
+        return `
+          <div style="background:#313244; border:1px solid #45475a; border-left:3px solid ${col}; border-radius:8px; padding:8px 10px;">
+            <div style="display:flex; align-items:center; gap:7px; flex-wrap:wrap;">
+              <span style="font-size:9.5px; font-weight:800; text-transform:uppercase; color:#1e1e2e; background:${col}; border-radius:4px; padding:1px 6px;">${escHtml(sev)}</span>
+              <span style="font-size:12px; font-weight:700; color:#cdd6f4;">${escHtml(ri.region || "")}</span>
+              ${ri.issue_type ? `<span style="font-size:11px; color:#a6adc8;">· ${escHtml(ri.issue_type)}</span>` : ""}
+            </div>
+            ${ri.description ? `<div style="margin-top:4px; font-size:12px; color:#bac2de; line-height:1.4;">${escHtml(ri.description)}</div>` : ""}
+            ${fixes.length
+            ? `<div style="margin-top:6px; display:flex; gap:4px; flex-wrap:wrap;">${fixes
+              .map((f) => `<span style="font-size:10.5px; color:#89b4fa; background:#89b4fa14; border:1px solid #89b4fa33; border-radius:5px; padding:1px 6px;">${escHtml(f)}</span>`)
+              .join("")}</div>`
+            : ""}
+          </div>`;
+      })
+      .join("");
+    parts.push(`
+      <details>
+        <summary style="cursor:pointer; font-size:12px; font-weight:700; color:#a6adc8;">Region issues (${regions.length})</summary>
+        <div style="display:flex; flex-direction:column; gap:6px; margin-top:8px;">${rows}</div>
+      </details>`);
+  }
+
+  if (suggestions.length) {
+    const items = suggestions
+      .map(
+        (s, i) => `
+        <div style="display:flex; gap:8px; align-items:flex-start;">
+          <span style="flex-shrink:0; font-size:10px; font-weight:800; color:#1e1e2e; background:#cba6f7; border-radius:99px; width:16px; height:16px; display:flex; align-items:center; justify-content:center; margin-top:1px;">${i + 1}</span>
+          <span style="font-size:12px; color:#bac2de; line-height:1.45;">${escHtml(s)}</span>
+        </div>`
+      )
+      .join("");
+    parts.push(`
+      <details>
+        <summary style="cursor:pointer; font-size:12px; font-weight:700; color:#cba6f7;">Suggested workflow evolutions (${suggestions.length})</summary>
+        <div style="display:flex; flex-direction:column; gap:7px; margin-top:8px;">${items}</div>
+      </details>`);
+  }
+
+  if (!parts.length) {
+    container.style.display = "none";
+    container.innerHTML = "";
+    return false;
+  }
+  container.innerHTML = `<div style="display:flex; flex-direction:column; gap:11px;">${parts.join("")}</div>`;
+  container.style.display = "block";
+  return true;
+}
+
 function showFeedbackPanel(msg) {
   if (!_feedbackPanel) {
     _feedbackPanel = createFeedbackPanel();
@@ -686,12 +842,30 @@ function showFeedbackPanel(msg) {
   const meta = _feedbackPanel.querySelector("#comfyclaw-fb-meta");
   meta.textContent = `Iteration ${msg.iteration || "?"} — Prompt: "${msg.prompt || "?"}"`;
 
+  // Generated image preview so the user can actually see what they're rating.
+  const imgWrap = _feedbackPanel.querySelector("#comfyclaw-fb-image-wrap");
+  const imgEl = _feedbackPanel.querySelector("#comfyclaw-fb-image");
+  const imgLink = _feedbackPanel.querySelector("#comfyclaw-fb-image-link");
+  if (msg.image_b64) {
+    imgEl.src = msg.image_b64;
+    if (imgLink) imgLink.href = msg.image_b64;
+    imgWrap.style.display = "block";
+  } else {
+    imgEl.removeAttribute("src");
+    imgWrap.style.display = "none";
+  }
+
+  // Prefer the structured, prettified verifier report; fall back to the raw
+  // text summary only when structured data isn't available.
+  const verifierEl = _feedbackPanel.querySelector("#comfyclaw-fb-verifier");
   const vlmEl = _feedbackPanel.querySelector("#comfyclaw-fb-vlm");
-  if (msg.vlm_summary) {
+  const renderedStructured = renderVerifierFeedback(verifierEl, msg.verifier);
+  if (!renderedStructured && msg.vlm_summary) {
     vlmEl.style.display = "block";
     vlmEl.textContent = "🤖 VLM Assessment:\n" + msg.vlm_summary;
   } else {
     vlmEl.style.display = "none";
+    vlmEl.textContent = "";
   }
 
   _feedbackPanel.querySelector("#comfyclaw-fb-text").value = "";
@@ -719,14 +893,21 @@ function hideFeedbackPanel() {
 function showSkillEvolutionProposalModal(proposal) {
   const p = proposal || {};
   const action = (p.action || "update").toString();
-  const name = (p.name || "unnamed-skill").toString();
   const confidence = Number.isFinite(Number(p.confidence)) ? Number(p.confidence) : 0;
   const evidence = Array.isArray(p.evidence) ? p.evidence.filter(Boolean) : [];
-  const body = (p.body || "").toString().trim() || "_No draft body was returned._";
-  const rationale = (p.rationale || "").toString().trim() || "No rationale provided.";
-  const description = (p.description || "").toString().trim() || "No description provided.";
   const actionLabel = action === "create" ? "Create new skill" : "Refine existing skill";
   const actionColor = action === "create" ? "var(--cc-accent-green)" : "var(--cc-accent-blue)";
+
+  // Single source of truth — the inline editors mutate this so Apply always
+  // sends exactly what the reviewer last saw, whether or not they edited.
+  const state = {
+    name: (p.name || "unnamed-skill").toString(),
+    description: (p.description || "").toString().trim(),
+    rationale: (p.rationale || "").toString().trim(),
+    body: (p.body || "").toString().trim(),
+  };
+  const original = { ...state };
+  let editMode = false;
 
   const evidenceHtml = evidence.length
     ? `<ol style="margin:0; padding-left:18px; display:flex; flex-direction:column; gap:6px;">
@@ -734,7 +915,8 @@ function showSkillEvolutionProposalModal(proposal) {
        </ol>`
     : `<div style="color:var(--cc-fg-dim);">No evidence captured.</div>`;
 
-  const bodyHtml = renderMarkdown(body);
+  // Containers below are populated by renderView()/renderEdit() after the modal
+  // mounts, so the same DOM nodes flip between read-only preview and editors.
   const modalBody = `
     <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 320px), 1fr));
                 gap:14px; align-items:start;">
@@ -751,14 +933,15 @@ function showSkillEvolutionProposalModal(proposal) {
             <span style="font-size:11px; color:var(--cc-fg-dim);">
               Confidence ${(confidence * 100).toFixed(0)}%
             </span>
+            <span id="cc-skill-evo-edited-badge" style="display:none; font-size:11px; font-weight:700;
+                         color:var(--cc-accent-yellow);">· edited</span>
           </div>
-          <div style="font-size:15px; font-weight:800; color:var(--cc-fg);
-                      font-family:monospace; overflow-wrap:anywhere;">
-            ${escHtml(name)}
-          </div>
-          <div style="margin-top:8px; color:var(--cc-fg-muted); line-height:1.55;">
-            ${escHtml(description)}
-          </div>
+          <div style="font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.04em;
+                      color:var(--cc-fg-dim); margin-bottom:4px;">Skill name</div>
+          <div id="cc-skill-evo-name"></div>
+          <div style="font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.04em;
+                      color:var(--cc-fg-dim); margin:10px 0 4px;">Description</div>
+          <div id="cc-skill-evo-desc"></div>
         </div>
 
         <div style="background:var(--cc-surface); border:1px solid var(--cc-border);
@@ -767,9 +950,7 @@ function showSkillEvolutionProposalModal(proposal) {
                       text-transform:uppercase; margin-bottom:7px;">
             Rationale
           </div>
-          <div style="color:var(--cc-fg-muted); line-height:1.55;">
-            ${renderMarkdown(rationale)}
-          </div>
+          <div id="cc-skill-evo-rationale" style="color:var(--cc-fg-muted); line-height:1.55;"></div>
         </div>
 
         <div style="background:var(--cc-surface); border:1px solid var(--cc-border);
@@ -793,15 +974,13 @@ function showSkillEvolutionProposalModal(proposal) {
                         text-transform:uppercase;">
               Draft SKILL.md Body
             </div>
-            <div style="font-size:11px; color:var(--cc-fg-dim);">
+            <div id="cc-skill-evo-body-hint" style="font-size:11px; color:var(--cc-fg-dim);">
               Rendered preview of the reusable lesson to write.
             </div>
           </div>
         </div>
-        <div class="cc-scroll" style="padding:12px; max-height:46vh; overflow:auto;
-                    color:var(--cc-fg); line-height:1.6;">
-          ${bodyHtml}
-        </div>
+        <div id="cc-skill-evo-body" class="cc-scroll" style="padding:12px; max-height:46vh; overflow:auto;
+                    color:var(--cc-fg); line-height:1.6;"></div>
       </section>
     </div>
 
@@ -811,6 +990,7 @@ function showSkillEvolutionProposalModal(proposal) {
         Applying writes this skill to the user skill directory and reloads the Skills tab.
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap; flex-shrink:0;">
+        <button id="cc-skill-evo-edit" class="cc-btn cc-btn-secondary">Edit</button>
         <button id="cc-skill-evo-skip" class="cc-btn cc-btn-secondary">Skip</button>
         <button id="cc-skill-evo-approve" class="cc-btn cc-btn-primary">Apply Skill Evolution</button>
       </div>
@@ -821,23 +1001,101 @@ function showSkillEvolutionProposalModal(proposal) {
     let answered = false;
     const modal = openModal({
       title: "Review Skill Evolution",
-      subtitle: `${actionLabel}: ${name}`,
+      subtitle: `${actionLabel}: ${state.name}`,
       body: modalBody,
       width: 920,
       dismissable: true,
       onClose: () => {
-        if (!answered) resolve(false);
+        if (!answered) resolve({ approved: false, proposal: null, edited: false });
       },
     });
 
+    const $ = (sel) => modal.body.querySelector(sel);
+    const inputCss =
+      "width:100%; box-sizing:border-box; background:var(--cc-surface-tint); color:var(--cc-fg);" +
+      "border:1px solid var(--cc-border); border-radius:8px; padding:8px 10px; font-size:13px;" +
+      "font-family:inherit;";
+
+    function renderView() {
+      $("#cc-skill-evo-name").innerHTML = `
+        <div style="font-size:15px; font-weight:800; color:var(--cc-fg);
+                    font-family:monospace; overflow-wrap:anywhere;">${escHtml(state.name)}</div>`;
+      $("#cc-skill-evo-desc").innerHTML = `
+        <div style="color:var(--cc-fg-muted); line-height:1.55;">${escHtml(state.description) || "No description provided."}</div>`;
+      $("#cc-skill-evo-rationale").innerHTML = renderMarkdown(state.rationale || "No rationale provided.");
+      $("#cc-skill-evo-body").innerHTML = renderMarkdown(state.body || "_No draft body was returned._");
+      const hint = $("#cc-skill-evo-body-hint");
+      if (hint) hint.textContent = "Rendered preview of the reusable lesson to write.";
+    }
+
+    function renderEdit() {
+      $("#cc-skill-evo-name").innerHTML = `
+        <input id="cc-evo-in-name" type="text" spellcheck="false" autocomplete="off"
+               value="${escAttr(state.name)}" style="${inputCss} font-family:monospace; font-weight:700;">`;
+      $("#cc-skill-evo-desc").innerHTML = `
+        <textarea id="cc-evo-in-desc" rows="3" style="${inputCss} resize:vertical;">${escHtml(state.description)}</textarea>`;
+      $("#cc-skill-evo-rationale").innerHTML = `
+        <textarea id="cc-evo-in-rationale" rows="4" style="${inputCss} resize:vertical;">${escHtml(state.rationale)}</textarea>`;
+      $("#cc-skill-evo-body").innerHTML = `
+        <textarea id="cc-evo-in-body" rows="18" style="${inputCss} resize:vertical;
+                  font-family:ui-monospace,Menlo,Consolas,monospace; line-height:1.5; min-height:320px;">${escHtml(state.body)}</textarea>`;
+      $("#cc-evo-in-name").addEventListener("input", (e) => { state.name = e.target.value; });
+      $("#cc-evo-in-desc").addEventListener("input", (e) => { state.description = e.target.value; });
+      $("#cc-evo-in-rationale").addEventListener("input", (e) => { state.rationale = e.target.value; });
+      $("#cc-evo-in-body").addEventListener("input", (e) => { state.body = e.target.value; });
+      const hint = $("#cc-skill-evo-body-hint");
+      if (hint) hint.textContent = "Editing raw Markdown — click Preview to render.";
+      setTimeout(() => $("#cc-evo-in-name")?.focus(), 30);
+    }
+
+    renderView();
+
+    const editBtn = $("#cc-skill-evo-edit");
+    editBtn?.addEventListener("click", () => {
+      editMode = !editMode;
+      if (editMode) {
+        renderEdit();
+        editBtn.textContent = "Preview";
+      } else {
+        renderView();
+        editBtn.textContent = "Edit";
+      }
+    });
+
+    const isEdited = () =>
+      state.name.trim() !== original.name.trim() ||
+      state.description.trim() !== original.description.trim() ||
+      state.rationale.trim() !== original.rationale.trim() ||
+      state.body.trim() !== original.body.trim();
+
     const answer = (approved) => {
       if (answered) return;
+      // Guard against approving an empty required field after editing.
+      if (approved && (!state.name.trim() || !state.description.trim() || !state.body.trim())) {
+        showToast("Skill name, description, and body can't be empty.", "warning", 4000);
+        if (!editMode) editBtn?.click();
+        return;
+      }
       answered = true;
       modal.close();
-      resolve(approved);
+      resolve({
+        approved,
+        edited: approved && isEdited(),
+        proposal: approved
+          ? {
+            action,
+            name: state.name.trim(),
+            description: state.description.trim(),
+            body: state.body.trim(),
+            rationale: state.rationale.trim(),
+            confidence,
+            evidence,
+          }
+          : null,
+      });
     };
-    modal.body.querySelector("#cc-skill-evo-skip")?.addEventListener("click", () => answer(false));
-    modal.body.querySelector("#cc-skill-evo-approve")?.addEventListener("click", () => answer(true));
+    $("#cc-skill-evo-skip")?.addEventListener("click", () => answer(false));
+    $("#cc-skill-evo-approve")?.addEventListener("click", () => answer(true));
   });
 }
 
@@ -4428,6 +4686,8 @@ function createComfyClawPanel() {
     chatInput.style.height = "auto";
     chatInput.style.height = Math.min(chatInput.scrollHeight, 160) + "px";
   });
+  // `/skill` slash-command autocomplete (same as the floating chat panel).
+  _wireSkillAutocomplete(chatInput);
 
   // ── Composer model chip + popover (Cursor-style inline model picker) ───────
   const modelChip = panel.querySelector("#cc-composer-model-chip");
@@ -5717,6 +5977,7 @@ function createComfyClawPanel() {
 let _scoreboardSink = null;   // (msg) => void; bound by tab augmentation
 let _historyTabRef = null;   // .startRun / .endRun / .addImage / .addIterationScore
 let _skillsTabRef = null;
+let _skillNamesCache = []; // enabled skill names, for /skill chat autocomplete
 let _modeToggleRef = null;
 let _modalityToggleRef = null;
 let _backendPickerRef = null;
@@ -6568,16 +6829,23 @@ class SyncClient {
       if (typeof _scoreboardSink === "function") _scoreboardSink(msg);
     } else if (msg.type === "skill_evolution_proposal") {
       const p = msg.proposal || {};
-      const approved = await showSkillEvolutionProposalModal(p);
+      const result = await showSkillEvolutionProposalModal(p);
+      const approved = !!result.approved;
+      const finalProposal = approved ? result.proposal || p : null;
+      const finalName = (finalProposal && finalProposal.name) || p.name || "";
+      const wasEdited = approved && !!result.edited;
       _wsSend({
         type: "apply_skill_evolution",
         approved,
-        name: p.name || "",
+        name: finalName,
+        // Echo back the (possibly human-edited) proposal so the server writes
+        // exactly what the reviewer saw/changed.
+        proposal: finalProposal || undefined,
       });
       appendAgentLog({
         event_type: "info",
         content: approved
-          ? `Skill evolution approved: **${p.name || ""}**`
+          ? `Skill evolution approved${wasEdited ? " (edited)" : ""}: **${finalName}**`
           : `Skill evolution skipped: **${p.name || ""}**`,
         timestamp: Date.now() / 1000,
       });
@@ -6585,6 +6853,11 @@ class SyncClient {
       || msg.type === "skill_body"
       || msg.type === "skill_import_result"
       || msg.type === "skill_error") {
+      if (msg.type === "skills_manifest" && Array.isArray(msg.skills)) {
+        _skillNamesCache = msg.skills
+          .filter((s) => s && s.enabled !== false && s.name)
+          .map((s) => String(s.name));
+      }
       _skillsTabRef?.onMessage(msg);
     } else if (msg.type === "agent_backends") {
       const map = {};
@@ -6865,7 +7138,7 @@ function createChatPanel() {
     <div style="padding:10px 12px; border-top:1px solid #313244; flex-shrink:0;">
       <div style="display:flex; gap:6px;">
         <textarea id="comfyclaw-chat-input"
-                  placeholder="Type a message…"
+                  placeholder="Type a message…  (/skill to use a skill)"
                   rows="2"
                   style="flex:1; padding:8px 10px; background:#313244; border:1px solid #45475a;
                          border-radius:8px; color:#cdd6f4; font-size:13px; resize:none;
@@ -6942,9 +7215,114 @@ function createChatPanel() {
   panel.querySelector("#comfyclaw-chat-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMsg(); }
   });
+  _wireSkillAutocomplete(panel.querySelector("#comfyclaw-chat-input"));
 
   document.body.appendChild(panel);
   return panel;
+}
+
+// ── /skill autocomplete for the chat composer ─────────────────────────────────
+// Lets the user force-load a skill by typing `/skill <name>`. The server-side
+// chat agent parses the same syntax and inlines that skill's full instructions.
+function _wireSkillAutocomplete(inputEl) {
+  if (!inputEl) return;
+  let menu = null;
+  let items = [];
+  let active = -1;
+
+  const close = () => {
+    if (menu) { menu.remove(); menu = null; }
+    items = [];
+    active = -1;
+  };
+
+  // Returns the active slash token under the caret, or null.
+  // Triggers on a bare "/" (command palette) as well as "/skill <partial>".
+  const ctx = () => {
+    const val = inputEl.value;
+    const caret = inputEl.selectionStart ?? val.length;
+    const before = val.slice(0, caret);
+    const m = before.match(/(?:^|\s)(\/(?:skills?\s+)?)([a-zA-Z0-9_\-]*)$/);
+    if (!m) return null;
+    const prefix = m[1];          // "/", "/skill ", or "/skills "
+    const typed = m[2] || "";     // partial after the prefix
+    // While the user is still typing the command word ("/", "/s", "/skill"…),
+    // show the full list; once past it, treat the text as a name filter.
+    const cmdWord = !prefix.includes("skill") && "skills".startsWith(typed.toLowerCase());
+    const query = cmdWord ? "" : typed;
+    const start = caret - prefix.length - typed.length; // position of the slash
+    return { start, caret, query };
+  };
+
+  const choose = (i) => {
+    const c = ctx();
+    if (!c || !items[i]) { close(); return; }
+    const val = inputEl.value;
+    const after = val.slice(c.caret);
+    const insert = `/skill ${items[i]} `;
+    inputEl.value = val.slice(0, c.start) + insert + after.replace(/^\s+/, "");
+    const pos = c.start + insert.length;
+    inputEl.setSelectionRange(pos, pos);
+    close();
+    inputEl.focus();
+  };
+
+  const render = () => {
+    const c = ctx();
+    if (!c) { close(); return; }
+    if (!(_skillNamesCache || []).length) {
+      // Manifest not loaded yet — ask the server, menu will appear on reply.
+      try { _activeSyncClient?.ws?.send(JSON.stringify({ type: "list_skills" })); } catch (_) {}
+      close();
+      return;
+    }
+    const q = c.query.toLowerCase();
+    items = (_skillNamesCache || [])
+      .filter((n) => n.toLowerCase().includes(q))
+      .slice(0, 8);
+    if (!items.length) { close(); return; }
+    if (active < 0 || active >= items.length) active = 0;
+    if (!menu) {
+      menu = document.createElement("div");
+      menu.style.cssText = `position:fixed; z-index:10001; background:#1e1e2e;
+        border:1px solid #45475a; border-radius:8px; padding:4px; min-width:200px;
+        max-height:220px; overflow-y:auto; box-shadow:0 6px 18px rgba(0,0,0,0.5);
+        font-size:12px;`;
+      document.body.appendChild(menu);
+    }
+    menu.innerHTML = items.map((n, i) => `
+      <div data-i="${i}" style="padding:5px 8px; border-radius:5px; cursor:pointer;
+        color:#cdd6f4; ${i === active ? "background:#45475a;" : ""}">
+        🧩 ${escHtml(n)}
+      </div>`).join("");
+    menu.querySelectorAll("[data-i]").forEach((el) => {
+      el.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        choose(parseInt(el.dataset.i, 10));
+      });
+    });
+    const r = inputEl.getBoundingClientRect();
+    menu.style.left = r.left + "px";
+    menu.style.width = r.width + "px";
+    menu.style.top = (r.top - Math.min(menu.scrollHeight, 220) - 6) + "px";
+  };
+
+  inputEl.addEventListener("input", render);
+  inputEl.addEventListener("keydown", (e) => {
+    if (!menu) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault(); e.stopImmediatePropagation();
+      active = (active + 1) % items.length; render();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault(); e.stopImmediatePropagation();
+      active = (active - 1 + items.length) % items.length; render();
+    } else if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault(); e.stopImmediatePropagation(); choose(active);
+    } else if (e.key === "Escape") {
+      e.preventDefault(); e.stopImmediatePropagation(); close();
+    }
+  }, true); // capture: run before the send-on-Enter handler
+  inputEl.addEventListener("blur", () => setTimeout(close, 120));
 }
 
 // ── Chat toggle button (shows as a bubble beside the 🐾 panel) ───────────────

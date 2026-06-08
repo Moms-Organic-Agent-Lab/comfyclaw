@@ -395,6 +395,8 @@ const CSS = `
 .cc-status-pill[data-state="complete"]  { border-left-color: var(--cc-accent-green); color: var(--cc-accent-green); }
 .cc-status-pill[data-state="error"]     { border-left-color: var(--cc-accent-red); color: var(--cc-accent-red); }
 .cc-status-pill[data-state="dry_run_done"] { border-left-color: var(--cc-accent-yellow); color: var(--cc-accent-yellow); }
+.cc-status-pill[data-state="evolving_skills"] { border-left-color: var(--cc-accent-blue); color: var(--cc-accent-blue); }
+.cc-status-pill[data-state="awaiting_skill_approval"] { border-left-color: var(--cc-accent); color: var(--cc-accent); }
 
 /* ── Score bar (used by scoreboard.js + history_panel.js) ─────────────── */
 .cc-score-bar-bg {
@@ -734,6 +736,8 @@ body[data-cc-has-native-sidebar="1"] #comfyclaw-edge-handle { display: none !imp
 .cc-composer-status[data-state="complete"]  { color: var(--cc-accent-green); }
 .cc-composer-status[data-state="error"]     { color: var(--cc-accent-red); }
 .cc-composer-status[data-state="dry_run_done"] { color: var(--cc-accent-yellow); }
+.cc-composer-status[data-state="evolving_skills"] { color: var(--cc-accent-blue); }
+.cc-composer-status[data-state="awaiting_skill_approval"] { color: var(--cc-accent); }
 .cc-composer-status span:first-child {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
 }

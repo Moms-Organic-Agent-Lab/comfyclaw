@@ -24,6 +24,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import sys
 import urllib.parse
 import urllib.request
@@ -1261,6 +1262,19 @@ class ClawAgent:
         # Hint at relevant skills (names only — full instructions loaded via read_skill)
         # Also suggest model-specific skills based on the active checkpoint name.
         relevant = self.skill_manager.detect_relevant_skills(original_prompt)
+        # Honour explicit "/skill <name>" directives typed by the user: promote
+        # those to the front so the agent loads them, and emit a hard directive.
+        forced_skills: list[str] = []
+        valid_names = set(self.skill_manager.skill_names)
+        for m in re.finditer(r"/skills?\s+([a-zA-Z0-9 ,_\-]+)", original_prompt or ""):
+            for tok in re.split(r"[\s,]+", m.group(1).strip()):
+                name = tok.strip().lower()
+                if name in valid_names and name not in forced_skills:
+                    forced_skills.append(name)
+        for name in reversed(forced_skills):
+            if name in relevant:
+                relevant.remove(name)
+            relevant.insert(0, name)
         if workflow_manager is not None and len(workflow_manager.workflow) == 0:
             if "workflow-builder" not in relevant:
                 relevant.insert(0, "workflow-builder")
@@ -1277,11 +1291,19 @@ class ClawAgent:
                         relevant.append(skill_name)
         if relevant:
             hint = ", ".join(sorted(relevant))
+            forced_line = ""
+            if forced_skills:
+                forced_line = (
+                    f"\n**The user explicitly requested these skills via /skill: "
+                    f'{", ".join(forced_skills)}. You MUST call read_skill on each of '
+                    "them and apply their instructions.**"
+                )
             parts.append(
                 f"## Suggested Skills\nThese skills may be relevant: {hint}\n"
                 "Call read_skill(<name>) to load full instructions before applying.\n"
                 '**If the active model is an LCM variant, read_skill("dreamshaper8-lcm") FIRST.**\n'
                 '**If the workflow contains QwenImageModelLoader, read_skill("qwen-image-2512") FIRST.**'
+                f"{forced_line}"
             )
 
         if verifier_feedback:

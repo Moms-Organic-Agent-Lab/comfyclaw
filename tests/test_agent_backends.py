@@ -551,3 +551,130 @@ class TestCodexSessionReuse:
         info_events = [content for et, content in events if et == "info"]
         assert "Starting Codex session" in info_events
         assert "Continuing Codex session" in info_events
+
+
+class TestClaudeSessionResume:
+    def test_records_claude_session_per_comfyclaw_session(self) -> None:
+        from comfyclaw.agent_backends.claude_code_backend import (
+            _get_recorded_claude_session,
+            _record_claude_session,
+        )
+
+        sid = "123e4567-e89b-12d3-a456-426614174abc"
+        _record_claude_session("comfyclaw-claude-a", sid)
+
+        assert _get_recorded_claude_session("comfyclaw-claude-a") == sid
+        assert _get_recorded_claude_session("comfyclaw-claude-b") == ""
+        # An empty key is never tracked (stateless mode).
+        _record_claude_session("", sid)
+        assert _get_recorded_claude_session("") == ""
+
+    def test_backend_creates_then_resumes_across_messages(self) -> None:
+        from comfyclaw.agent_backends import claude_code_backend as ccb
+        from comfyclaw.agent_backends.claude_code_backend import (
+            _CLAUDE_SESSION_BY_KEY,
+            ClaudeCodeBackend,
+        )
+
+        key = "comfyclaw-claude-resume-test"
+        _CLAUDE_SESSION_BY_KEY.pop(key, None)
+
+        envelope = json.dumps(
+            {
+                "tool_calls": [
+                    {"name": "finalize_workflow", "arguments": {"rationale": "done"}}
+                ],
+                "rationale": "done",
+                "done": False,
+            }
+        )
+        argv_calls: list[list[str]] = []
+        prompts: list[str] = []
+
+        def fake_oneshot(argv, prompt, timeout=None, env=None):
+            argv_calls.append(list(argv))
+            prompts.append(prompt)
+            return 0, envelope, ""
+
+        events: list[tuple[str, str]] = []
+        be = ClaudeCodeBackend(model="sonnet", session_key=key)
+        with patch.object(ccb._stream_session, "run_cli_oneshot", side_effect=fake_oneshot):
+            for _ in range(2):
+                assert (
+                    be.run_tool_loop(
+                        system="sys",
+                        user="user",
+                        tools=[],
+                        dispatch=lambda call: ("ok", call.name == "finalize_workflow"),
+                        on_event=lambda et, content, tool, args: events.append((et, content)),
+                    )
+                    == "done"
+                )
+
+        # First message creates a session; the second resumes that same id.
+        assert "--session-id" in argv_calls[0]
+        assert "--resume" not in argv_calls[0]
+        assert "--resume" in argv_calls[1]
+        assert "--session-id" not in argv_calls[1]
+        created = argv_calls[0][argv_calls[0].index("--session-id") + 1]
+        resumed = argv_calls[1][argv_calls[1].index("--resume") + 1]
+        assert created == resumed
+
+        info_events = [content for et, content in events if et == "info"]
+        assert any("Starting Claude Code session" in c for c in info_events)
+        assert any("Continuing Claude Code session" in c for c in info_events)
+
+    def test_resume_failure_falls_back_to_fresh_session(self) -> None:
+        from comfyclaw.agent_backends import claude_code_backend as ccb
+        from comfyclaw.agent_backends.claude_code_backend import (
+            _CLAUDE_SESSION_BY_KEY,
+            ClaudeCodeBackend,
+            _record_claude_session,
+        )
+
+        key = "comfyclaw-claude-prune-test"
+        stale = "00000000-0000-0000-0000-000000000000"
+        _CLAUDE_SESSION_BY_KEY.pop(key, None)
+        _record_claude_session(key, stale)
+
+        envelope = json.dumps(
+            {
+                "tool_calls": [
+                    {"name": "finalize_workflow", "arguments": {"rationale": "done"}}
+                ],
+                "rationale": "done",
+                "done": False,
+            }
+        )
+        argv_calls: list[list[str]] = []
+
+        def fake_oneshot(argv, prompt, timeout=None, env=None):
+            argv_calls.append(list(argv))
+            # A --resume against the stale id fails; a fresh --session-id works.
+            if "--resume" in argv:
+                return 1, "", "No conversation found with session ID"
+            return 0, envelope, ""
+
+        be = ClaudeCodeBackend(model="sonnet", session_key=key)
+        with patch.object(ccb._stream_session, "run_cli_oneshot", side_effect=fake_oneshot):
+            assert (
+                be.run_tool_loop(
+                    system="sys",
+                    user="user",
+                    tools=[],
+                    dispatch=lambda call: ("ok", call.name == "finalize_workflow"),
+                )
+                == "done"
+            )
+
+        # Resume was attempted, then it recreated a brand-new session id.
+        assert "--resume" in argv_calls[0]
+        assert "--session-id" in argv_calls[1]
+        new_id = argv_calls[1][argv_calls[1].index("--session-id") + 1]
+        assert new_id != stale
+        # The stale id was evicted and replaced with the new one.
+        from comfyclaw.agent_backends.claude_code_backend import (
+            _get_recorded_claude_session,
+        )
+
+        assert _get_recorded_claude_session(key) == new_id

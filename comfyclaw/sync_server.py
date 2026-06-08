@@ -96,6 +96,41 @@ except ImportError:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Feedback image helper
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _encode_image_data_url(image_path: str | None) -> str:
+    """Read *image_path* and return a ``data:`` URL, or ``""`` on any failure.
+
+    The feedback panel renders in the browser, which can't reach a server-side
+    filesystem path, so the image bytes are inlined as a base64 data URL.
+    """
+    if not image_path:
+        return ""
+    try:
+        import base64
+
+        data = Path(image_path).read_bytes()
+    except Exception:
+        return ""
+    if not data:
+        return ""
+    head = data[:12]
+    if head[:2] == b"\xff\xd8":
+        mime = "image/jpeg"
+    elif head[:8] == b"\x89PNG\r\n\x1a\n":
+        mime = "image/png"
+    elif head[:6] in (b"GIF87a", b"GIF89a"):
+        mime = "image/gif"
+    elif head[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        mime = "image/webp"
+    else:
+        mime = "image/png"
+    return f"data:{mime};base64," + base64.b64encode(data).decode("ascii")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Diff helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -439,12 +474,17 @@ class SyncServer:
         proposal: dict,
         target_ws: Any = None,
         timeout: float = 600.0,
-    ) -> bool:
-        """Ask one ComfyUI tab whether a post-run skill proposal should apply."""
-        if not self._loop or not self.is_running():
-            return False
+    ) -> dict:
+        """Ask one ComfyUI tab whether a post-run skill proposal should apply.
 
-        async def _ask() -> bool:
+        Returns a dict ``{"approved": bool, "proposal": dict | None}`` where
+        ``proposal`` is the (possibly human-edited) skill the reviewer chose to
+        apply, or ``{"approved": False}`` if no client could be reached.
+        """
+        if not self._loop or not self.is_running():
+            return {"approved": False}
+
+        async def _ask() -> dict:
             with self._conns_lock:
                 ws = (
                     target_ws
@@ -453,7 +493,7 @@ class SyncServer:
                 )
                 conn = self._conns.get(ws) if ws else None
             if ws is None or conn is None:
-                return False
+                return {"approved": False}
             fut = self._loop.create_future()  # type: ignore[union-attr]
             conn.skill_evolution_fut = fut
             await ws.send(
@@ -468,13 +508,14 @@ class SyncServer:
                 reply = await asyncio.wait_for(fut, timeout=timeout)
             finally:
                 conn.skill_evolution_fut = None
-            return bool(reply.get("approved"))
+            return reply if isinstance(reply, dict) else {"approved": bool(reply)}
 
         fut = asyncio.run_coroutine_threadsafe(_ask(), self._loop)
         try:
-            return bool(fut.result(timeout=timeout + 5.0))
+            result = fut.result(timeout=timeout + 5.0)
+            return result if isinstance(result, dict) else {"approved": bool(result)}
         except Exception:
-            return False
+            return {"approved": False}
 
     def request_model_download(
         self,
@@ -607,12 +648,19 @@ class SyncServer:
         iteration: int = 0,
         prompt: str = "",
         target_ws: Any = None,
+        verifier: dict | None = None,
     ) -> None:
+        # Browsers can't read a server-side filesystem path, so embed the
+        # rendered image as a data URL the panel can display inline. This is
+        # the single choke-point every feedback caller flows through, so doing
+        # it here means all of them (VLM, hybrid, pure-human) get the preview.
         self._send_json(
             {
                 "type": "request_feedback",
                 "image_path": image_path,
+                "image_b64": _encode_image_data_url(image_path),
                 "vlm_summary": vlm_summary,
+                "verifier": verifier,
                 "iteration": iteration,
                 "prompt": prompt,
             },
@@ -753,6 +801,14 @@ class SyncServer:
         with self._skills_lock:
             if self._skills_registry is not None:
                 self._skills_registry.reload()
+        # Push the refreshed list to every connected tab so newly written skills
+        # (e.g. from approved post-run evolution) show up in the Skills panel
+        # immediately, without the user having to hit the manual refresh button.
+        try:
+            manifest = self.skills_registry().get_manifest()
+        except Exception:
+            return
+        self._send_json({"type": "skills_manifest", "skills": manifest})
 
     # ── async helpers for chat + debug ───────────────────────────────────────
 
@@ -815,6 +871,7 @@ class SyncServer:
                 api_key=api_key,
                 api_base=api_base,
                 agent_backend=backend,
+                skills_registry=False,
             ):
                 chunks.append(tok)
             refined = "".join(chunks).strip()
@@ -1520,6 +1577,7 @@ class SyncServer:
                 agent_backend=agent_backend,
                 images=images,
                 session_id=session_id,
+                skills_registry=self.skills_registry(),
             ):
                 await websocket.send(
                     json.dumps(
@@ -1916,7 +1974,10 @@ class SyncServer:
         elif t == "apply_skill_evolution":
             approved = bool(msg.get("approved", False))
             if conn.skill_evolution_fut and not conn.skill_evolution_fut.done():
-                conn.skill_evolution_fut.set_result({"approved": approved})
+                # ``proposal`` carries any human edits made in the review modal.
+                conn.skill_evolution_fut.set_result(
+                    {"approved": approved, "proposal": msg.get("proposal")}
+                )
             else:
                 await self._send_skill_error(ws, "No pending skill evolution proposal.")
 

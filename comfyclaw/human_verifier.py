@@ -231,6 +231,7 @@ class HybridVerifier:
         self._sync.request_feedback(
             image_path=image_path,
             vlm_summary=vlm_result.format_feedback(),
+            verifier=vlm_result.to_payload(),
             iteration=iteration,
             prompt=prompt,
         )

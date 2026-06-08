@@ -203,24 +203,37 @@ def run_envelope_loop(
     max_rounds: int,
     protocol_in_system: bool = False,
     start_message: str | None = None,
+    incremental_session: bool = False,
 ) -> str:
     """Drive a CLI agent that doesn't natively support tool-use.
 
     ``invoke(prompt: str) -> str`` is a callable supplied by each backend
     that runs one turn of the CLI and returns the model's raw text output.
+
+    ``incremental_session``
+        When True, the backend keeps conversation history itself (e.g. via the
+        Claude CLI's ``--resume``), so each round sends only the *newest* turn
+        — the initial user message, then just the tool results — instead of
+        replaying the whole transcript every round.  When False (default) the
+        loop is stateless and re-sends the full transcript each round, which is
+        what backends without native session resume require.
     """
     full_system = system if protocol_in_system else system + envelope_protocol_instructions(tools)
     convo: list[str] = [
         f"<<SYSTEM>>\n{full_system}\n<<END SYSTEM>>",
         f"<<USER>>\n{user}\n<<END USER>>",
     ]
+    # In incremental mode the very first turn carries the system prompt (via the
+    # backend's own flags) plus the user message; later turns carry only the
+    # fresh tool results.
+    pending_turn = user
     rationale = "(no rationale provided)"
 
     if on_event:
         on_event("info", start_message or f"Starting {backend_name} turn", "", None)
 
     for _round_idx in range(1, max_rounds + 1):
-        prompt = "\n\n".join(convo)
+        prompt = pending_turn if incremental_session else "\n\n".join(convo)
         try:
             raw = invoke(prompt)
         except Exception as exc:  # noqa: BLE001
@@ -297,7 +310,11 @@ def run_envelope_loop(
             break
 
         # Feed results back as next user turn
+        next_user_turn = format_tool_results_for_next_turn(results)
         convo.append(f"<<ASSISTANT>>\n{json.dumps(env)}\n<<END ASSISTANT>>")
-        convo.append(f"<<USER>>\n{format_tool_results_for_next_turn(results)}\n<<END USER>>")
+        convo.append(f"<<USER>>\n{next_user_turn}\n<<END USER>>")
+        # In incremental mode the backend's session already holds the prior
+        # turns, so the next call sends only the new tool results.
+        pending_turn = next_user_turn
 
     return rationale

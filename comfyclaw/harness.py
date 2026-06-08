@@ -345,6 +345,7 @@ class ClawHarness:
                 api_key=config.api_key,
                 model=config.verifier_model or config.model,
                 score_weights=config.score_weights,
+                backend=config.agent_backend,
             )
 
         # run_mode is the user-facing knob; verifier_mode is derived.
@@ -1017,6 +1018,7 @@ class ClawHarness:
             self._sync.request_feedback(
                 image_path=str(image_path),
                 vlm_summary=result.format_feedback(),
+                verifier=result.to_payload(),
                 iteration=iteration,
                 prompt=prompt,
                 target_ws=getattr(self, "_sync_ws", None),
@@ -1224,6 +1226,7 @@ class ClawHarness:
                 raise RuntimeError("no text completion backend available")
             return verifier.complete(text, max_tokens=max_tokens)
 
+        self._emit_status("evolving_skills", 0, "Reviewing run for skill evolution…")
         evolver = SkillEvolver(
             self._agent.skill_manager,
             complete=_complete if self._verifier is not None else None,
@@ -1257,13 +1260,27 @@ class ClawHarness:
             return True
         if self._sync and hasattr(self._sync, "request_skill_evolution"):
             try:
-                return bool(
-                    self._sync.request_skill_evolution(
-                        proposal.to_dict(),
-                        target_ws=getattr(self, "_sync_ws", None),
-                        timeout=600.0,
-                    )
+                # Make the wait explicit in the UI — otherwise the panel keeps
+                # showing the previous "Verifying image…" status while the run is
+                # actually parked here waiting for the reviewer to respond.
+                self._emit_status(
+                    "awaiting_skill_approval",
+                    0,
+                    f"Awaiting your approval to save skill “{proposal.name}”…",
                 )
+                reply = self._sync.request_skill_evolution(
+                    proposal.to_dict(),
+                    target_ws=getattr(self, "_sync_ws", None),
+                    timeout=600.0,
+                )
+                if isinstance(reply, dict):
+                    approved = bool(reply.get("approved"))
+                    if approved and isinstance(reply.get("proposal"), dict):
+                        # Fold any human edits from the review modal back into the
+                        # proposal that maybe_evolve() is about to write.
+                        self._apply_proposal_edits(proposal, reply["proposal"])
+                    return approved
+                return bool(reply)
             except Exception as exc:  # noqa: BLE001
                 print(f"[SkillEvolver] UI approval unavailable: {exc}")
         print("\n[SkillEvolver] ── Proposed Skill Evolution ──")
@@ -1273,6 +1290,27 @@ class ClawHarness:
             return False
         answer = input("\nApply this skill evolution? [y/N] ").strip().lower()
         return answer in {"y", "yes"}
+
+    @staticmethod
+    def _apply_proposal_edits(
+        proposal: SkillEvolutionProposal, edited: dict
+    ) -> None:
+        """Apply human edits from the review modal onto *proposal* in place.
+
+        Only non-empty values overwrite the originals so a reviewer can't blank
+        out a required field (name/description/body) by accident — those keep
+        the agent's draft. ``maybe_evolve`` writes this same object after we
+        return, so mutating in place is enough.
+        """
+        from .skill_evolver import _slugify
+
+        name = str(edited.get("name") or "").strip()
+        if name:
+            proposal.name = _slugify(name) or proposal.name
+        for field in ("description", "body", "rationale"):
+            value = edited.get(field)
+            if isinstance(value, str) and value.strip():
+                setattr(proposal, field, value.strip())
 
     def _print_summary(self, best_score: float) -> None:
         print("\n[ClawHarness] ── Evolution Summary ──")

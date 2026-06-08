@@ -48,10 +48,17 @@ def _litellm_text_response(text: str) -> MagicMock:
 
 def _make_verifier() -> ClawVerifier:
     """Create a ClawVerifier without calling __init__ (no API key needed)."""
+    from comfyclaw.verifier_vision import LiteLLMVision
+
     verifier = ClawVerifier.__new__(ClawVerifier)
     verifier.model = "anthropic/claude-test"
     verifier.score_weights = (0.6, 0.4)
     verifier.max_workers = 2
+    verifier.backend = "litellm"
+    # The verifier routes vision through a transport adapter; the LiteLLM
+    # adapter still calls ``litellm.completion`` under the hood, so the
+    # existing ``patch("litellm.completion", ...)`` mocks keep working.
+    verifier._vision = LiteLLMVision(verifier.model)
     return verifier
 
 
@@ -280,10 +287,14 @@ class TestScoreBlending:
                 )
             ),
         ]
+        from comfyclaw.verifier_vision import LiteLLMVision
+
         v = ClawVerifier.__new__(ClawVerifier)
         v.model = "anthropic/claude-test"
         v.score_weights = (0.5, 0.5)
         v.max_workers = 2
+        v.backend = "litellm"
+        v._vision = LiteLLMVision(v.model)
         with patch("litellm.completion", side_effect=side_effects):
             result = v.verify(png_bytes, "p")
         # 0.5 * 0.5 + 0.5 * 0.8 = 0.65

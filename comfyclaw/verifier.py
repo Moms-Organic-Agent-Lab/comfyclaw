@@ -23,8 +23,6 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-import litellm
-
 # ---------------------------------------------------------------------------
 # Data types
 # ---------------------------------------------------------------------------
@@ -61,6 +59,31 @@ class VerifierResult:
     evolution_suggestions: list[str] = field(default_factory=list)
     feedback_source: str = "vlm"  # "vlm", "human", or "hybrid"
     human_feedback: dict = field(default_factory=dict)
+
+    def to_payload(self) -> dict:
+        """Structured verifier data for the feedback panel (pretty rendering).
+
+        Mirrors :meth:`format_feedback` but as JSON the browser can style
+        itself instead of parsing a flat string.
+        """
+        return {
+            "score": self.score,
+            "overall_assessment": self.overall_assessment or "",
+            "passed": list(self.passed or []),
+            "failed": list(self.failed or []),
+            "region_issues": [
+                {
+                    "severity": ri.severity,
+                    "region": ri.region,
+                    "issue_type": ri.issue_type,
+                    "description": ri.description,
+                    "fix_strategies": list(ri.fix_strategies or []),
+                }
+                for ri in (self.region_issues or [])
+            ],
+            "evolution_suggestions": list(self.evolution_suggestions or []),
+            "feedback_source": self.feedback_source,
+        }
 
     def format_feedback(self) -> str:
         lines = [f"Overall score: {self.score:.2f}  |  {self.overall_assessment}"]
@@ -169,12 +192,24 @@ class ClawVerifier:
         model: str = "anthropic/claude-sonnet-4-5",
         score_weights: tuple[float, float] = (0.6, 0.4),
         max_workers: int = 6,
+        backend: str = "litellm",
     ) -> None:
         if api_key:
             os.environ.setdefault("ANTHROPIC_API_KEY", api_key)
         self.model = model
         self.score_weights = score_weights
-        self.max_workers = max_workers
+        self.backend = backend
+
+        # Decouple the transport: CLI backends (codex / claude-code) verify
+        # through the user's subscription login instead of a LiteLLM API key.
+        from .verifier_vision import CliVision, make_vision_completer
+
+        self._vision = make_vision_completer(
+            backend, model, has_api_key=bool(api_key or os.environ.get("ANTHROPIC_API_KEY"))
+        )
+        # CLI vision spawns one subprocess per request; keep the requirement
+        # fan-out modest so we don't launch a dozen CLI processes at once.
+        self.max_workers = 2 if isinstance(self._vision, CliVision) else max_workers
 
     # ------------------------------------------------------------------
     # Public API
@@ -242,20 +277,12 @@ class ClawVerifier:
 
         Used by the harness for lightweight summarisation tasks.
         """
-        resp = litellm.completion(
-            model=self.model,
-            max_tokens=max_tokens,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return (resp.choices[0].message.content or "").strip()
+        return self._vision.complete_text(prompt, max_tokens=max_tokens)
 
     def _decompose_prompt(self, prompt: str) -> list[str]:
-        resp = litellm.completion(
-            model=self.model,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": _DECOMPOSE_PROMPT.format(prompt=prompt)}],
-        )
-        text = (resp.choices[0].message.content or "").strip()
+        text = self._vision.complete_text(
+            _DECOMPOSE_PROMPT.format(prompt=prompt), max_tokens=1024
+        ).strip()
         try:
             m = re.search(r"\[.*\]", text, re.DOTALL)
             return json.loads(m.group() if m else text)
@@ -270,29 +297,18 @@ class ClawVerifier:
     ) -> list[RequirementCheck]:
         """Check each question in parallel using pre-encoded image data."""
 
-        # OpenAI-style image_url with base64 data URI — LiteLLM translates
-        # this to the provider-specific format (Anthropic, Gemini, etc.).
-        image_block = {
-            "type": "image_url",
-            "image_url": {"url": f"data:{media_type};base64,{b64_data}"},
-        }
-
         def check_one(q: str) -> RequirementCheck:
             try:
-                resp = litellm.completion(
-                    model=self.model,
-                    max_tokens=16,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                image_block,
-                                {"type": "text", "text": f"Answer only 'yes' or 'no'. {q}"},
-                            ],
-                        }
-                    ],
+                ans = (
+                    self._vision.complete_with_image(
+                        b64_data,
+                        media_type,
+                        f"Answer only 'yes' or 'no'. {q}",
+                        max_tokens=16,
+                    )
+                    .strip()
+                    .lower()
                 )
-                ans = (resp.choices[0].message.content or "").strip().lower()
                 return RequirementCheck(q, ans, "yes" in ans and "no" not in ans)
             except Exception as exc:
                 return RequirementCheck(q, f"error: {exc}", False)
@@ -302,28 +318,13 @@ class ClawVerifier:
             return list(ex.map(check_one, questions))
 
     def _detailed_analysis(self, b64_data: str, media_type: str, prompt: str) -> dict:
-        image_block = {
-            "type": "image_url",
-            "image_url": {"url": f"data:{media_type};base64,{b64_data}"},
-        }
         try:
-            resp = litellm.completion(
-                model=self.model,
+            text = self._vision.complete_with_image(
+                b64_data,
+                media_type,
+                _DETAILED_ANALYSIS_PROMPT.format(prompt=prompt),
                 max_tokens=1500,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            image_block,
-                            {
-                                "type": "text",
-                                "text": _DETAILED_ANALYSIS_PROMPT.format(prompt=prompt),
-                            },
-                        ],
-                    }
-                ],
-            )
-            text = (resp.choices[0].message.content or "").strip()
+            ).strip()
             m = re.search(r"\{.*\}", text, re.DOTALL)
             return json.loads(m.group() if m else text)
         except Exception as exc:

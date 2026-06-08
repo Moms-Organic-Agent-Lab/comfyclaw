@@ -172,7 +172,10 @@ def get_backend(
     if name in ("claude-code", "claude"):
         from .claude_code_backend import ClaudeCodeBackend
 
-        be = ClaudeCodeBackend(model=model or extra.get("model", ""))
+        be = ClaudeCodeBackend(
+            model=model or extra.get("model", ""),
+            session_key=str(extra.get("session_id") or ""),
+        )
         if be.is_available():
             _check_cli_auth("claude-code")
             return be
