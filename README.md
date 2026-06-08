@@ -1,7 +1,7 @@
 <h1 align="center">ComfyClaw</h1>
 
 <p align="center">
-  <strong>Harnessing Agent Self-Evolving Skills for Workflow Control</strong>
+  <strong>Agentic ComfyUI image &amp; video generation &mdash; self-evolving skills, human in the loop</strong>
 </p>
 
 <p align="center">
