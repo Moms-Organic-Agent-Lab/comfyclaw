@@ -5,7 +5,7 @@ message: >-
   paper. Update this entry with the venue once camera-ready details are
   finalized.
 type: software
-license: MIT
+license: GPL-3.0-or-later
 repository-code: "https://github.com/Moms-Organic-Agent-Lab/comfyclaw"
 url: "https://github.com/Moms-Organic-Agent-Lab/comfyclaw"
 version: "0.1.0"

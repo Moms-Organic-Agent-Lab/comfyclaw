@@ -54,7 +54,7 @@ for the GitHub org.
   `.gitignore` but worth a manual sweep before tagging.
 - Personal notes, paper drafts, experiment logs, or other research
   artefacts that don't belong to the open-source release.
-- Anything under a license incompatible with MIT, except the one
+- Anything under a license incompatible with GPL-3.0, except the one
   Apache-2.0 exception already documented in `LICENSE` (the
   `skill-creator` skill under `comfyclaw/skills/skill-creator/`).
 

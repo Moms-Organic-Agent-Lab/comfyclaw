@@ -160,7 +160,8 @@ First public, camera-ready release accompanying the paper
 
 ### Project meta
 
-- MIT license, with attribution to the paper authors and a third-party
+- GPL-3.0 license (matching ComfyUI, since ComfyClaw is a plugin /
+  derivative work), with attribution to the paper authors and a third-party
   notice for the bundled `skill-creator` skill (Apache-2.0).
 - `CITATION.cff` shipped at the repository root for one-click citation
   in GitHub.

@@ -120,7 +120,7 @@ echo "[init_public_repo] Initialising fresh repo…"
 
 ComfyClaw: An Agentic Harness for Skill-Evolving Image Generation Workflows.
 Reference implementation accompanying the paper by Li, Liu, Chen, Wu, Liu,
-Zhou, Xie, Wu, and Sun (2026). MIT-licensed."
+Zhou, Xie, Wu, and Sun (2026). GPL-3.0-licensed (matching ComfyUI)."
 )
 
 cat <<EOF
