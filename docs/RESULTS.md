@@ -41,35 +41,6 @@ over successive verifier-guided iterations, with region-level critiques driving
 each repair.
 </em></p>
 
----
-
-## Quantitative
-
-ComfyClaw is evaluated on four text-to-image benchmark splits — GenEval2,
-DPG-Bench, OneIG-EN, and OneIG-ZH — using three agent models (Claude Sonnet
-4.5, Qwen-3.6-35B-A3B, Gemma-4-E4B-it) and two image backbones
-(Z-Image-Turbo, LongCat-Image). Headline numbers (Table 1 in the paper,
-Soft-TIFA / VQAScore averaged):
-
-| Setting | BASE | ComfyGEMS *(no skill evolution)* | **ComfyClaw** |
-|---|---:|---:|---:|
-| Claude Sonnet 4.5 + Z-Image-Turbo | 67.94 | 73.93 | **77.78** |
-| Claude Sonnet 4.5 + LongCat-Image | 67.08 | 75.13 | **75.52** |
-| Qwen-3.6-35B + Z-Image-Turbo | 63.84 | 70.23 | **78.62** |
-| Qwen-3.6-35B + LongCat-Image | 65.05 | 65.51 | **76.34** |
-| Gemma-4-E4B + Z-Image-Turbo | 60.84 | 60.84 | **65.01** |
-| Gemma-4-E4B + LongCat-Image | 39.07 | 34.28 | **43.94** |
-
-ComfyClaw posts the best average in **all six** agent–backbone settings,
-improves over the verifier-only `ComfyGEMS` ablation by ≈ 4 points and
-over the no-refinement `Base` by ≈ 10 points on average, and is
-preferred by human annotators on a 2,400-image study (Table 2 in the
-paper). Across the Claude-Sonnet runs the harness accumulates
-**318 unique evolved skills (4,768 versions)**, and on dense /
-compositional benchmarks these evolved skills account for **56–70 %**
-of all skill reads.
-
----
 
 ## Qualitative
 
@@ -90,11 +61,3 @@ for the exact commands used to produce these images.
 </em></p>
 
 ---
-
-## Reproducing
-
-The full reproducibility guide lives at [`REPRODUCING.md`](REPRODUCING.md):
-the exact ComfyUI / Python / `uv` versions, the checkpoints / LoRAs / VAEs to
-download, the CLI commands for each headline experiment (with expected verifier
-scores and iteration counts), and how to swap agent / verifier backends for the
-multi-provider ablations.
